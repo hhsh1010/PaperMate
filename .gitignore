@@ -1,0 +1,83 @@
+# ===================== LightCore / PaperMate =====================
+
+# ---- Python ----
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.tox/
+.coverage
+htmlcov/
+
+# ---- 环境与密钥（★ 绝不可入库）----
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# ---- 运行时数据 ----
+# 含：API key（provider_settings.json）、用户上传的论文、SQLite、faiss 索引、快照、日志
+data/
+*.db
+*.sqlite3
+*.tmp
+
+# ---- 前端 ----
+web/node_modules/
+web/dist/
+web/dist.old/
+
+# ---- 宿主工具缓存（非本项目产物）----
+.dsh-plugin-cache/
+
+# ---- 项目工作记忆与内部记录（隐私）----
+.workbuddy/
+
+# ---- 重模型权重（BGE-M3 等，体积大）----
+models/
+.cache/huggingface/
+
+# ---- 运行产物 ----
+eval/*.log
+eval/_*.jsonl
+eval/_*.lock
+eval/*.bak-*
+eval/_*.txt
+
+# ---- 备份 / 临时 / 编辑器 ----
+*.bak-*
+*~
+*.orig
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# ---- 追加（2026-10-05，Git 化体检发现）----
+# Vite 自动生成的临时配置文件（实测 4 个已混进拟入库清单）
+web/vite.config.ts.timestamp-*
+# 单实例锁残留（run_tests.py 与探针脚本）
+.pytest_instance.lock
+.rerank_arms.lock
+eval/*.lock
+
+# ---- D2（2026-10-05）：eval 只入库「脚本 + 输入 + judge 提示词」----
+# ★ 保留：eval/*.py · eval/cases/**（gold 集）· eval/corpus/**（评测语料）
+#         eval/judge_prompts/**（判官提示词 —— 缺它评测无法复现，故随代码入库）
+# 排除：报告 / 判分标注 / 探针结果 —— 属内部质量活动产物
+eval/report_*.json
+eval/eval_report.json
+eval/rerank_arms_quality_*.json
+eval/judge_*.json
+eval/judge_*.jsonl
+eval/judge_*.csv
+eval/judge_*.md
+eval/_*.json
+eval/*.csv
+eval/*.txt
+
+# ---- docx 原子写残留的空临时目录（实测 29 个）----
+docs/tmp*/

@@ -1,0 +1,75 @@
+"""占用率**落库**（P1-a2，2026-10-03）：源码契约 + 边界说明。
+
+## 修的缺陷
+P1-a 的占用率只存在于**当轮** SSE 的 `done` 事件里 ⇒ 刷新 / 切会话后历史消息
+（`MessageOut`，**无 done 字段**）拿不到 ⇒ 「**当轮看得到、刷新即消失**」
+（与 `history.ts` 的 B2-X1 引用卡片同类）。修法：落进既有 `meta_json`（零 DDL）。
+
+## ⚠️ 诚实边界：为什么这里只有**源码契约**、没有行为测试
+`_persist_meta` / `_ctx_usage_from_done` / `_ctx_usage_from_events` 都定义在
+`stream_message()` 的**闭包内**（`routes_search.py:610+`，父容器是行 428 的路由函数）
+⇒ **无法 import**，也就无法单元测试其行为。
+
+⇒ 折中：本文件用**源码契约**守住"接线没断 + 合并不污染 invalid"这两件**结构事实**；
+   「回填后前端能否正确显示」由 `web/src/lib/ctxUsageHistory.test.ts` 的**行为测试**覆盖
+   （`historyToThread` 是导出纯函数，可直接调用）。
+⇒ **若要真正的后端行为测试，需先把这三个函数提取到模块级**（属独立重构，未做）。
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+ROUTES = Path(__file__).resolve().parents[1] / "src" / "papermate" / "api" / "routes_search.py"
+
+
+@pytest.fixture(scope="module")
+def src() -> str:
+    return ROUTES.read_text(encoding="utf-8")
+
+
+class TestPersistWiring:
+    """★★ 防"函数写了但没接上" —— 这是本项目反复踩过的失效模式。"""
+
+    def test_both_persist_points_pass_ctx(self, src: str):
+        """两处落库点（技能/流式路径）都必须把占用率传进 meta。
+
+        - `gen()`：用 `_ctx_usage_from_events(events)`
+        - `_watch_agent()`：用 `_ctx_usage_from_done(done_data)`（它直接有 done_data）
+        """
+        assert "ctx=_ctx_usage_from_events(events)" in src, "gen 路径没接占用率"
+        assert "ctx=_ctx_usage_from_done(done_data)" in src, "流式路径没接占用率"
+
+    def test_zero_cost_path_deliberately_not_wired(self, src: str):
+        """直答路径（`_pump_direct`）**刻意不接**：它不走 loop ⇒ 没有峰值这个概念。
+
+        ⚠️ 这里断言的是"**确实没接**"，防止后人"顺手补上"却传了个假值（伪造数据）。
+        """
+        # `_pump_direct` 的落库传的是**空 events 列表**（用单行锚点：
+        # ⚠️ 跨行锚点会因实际换行位置而匹配失败，这是本项目记录过的坑）
+        assert "history, [], final_text, model," in src
+
+    def test_helpers_exist(self, src: str):
+        for name in ("_ctx_usage_from_done", "_ctx_usage_from_events"):
+            assert f"def {name}(" in src, f"缺少 {name}"
+
+
+class TestMergeDoesNotPolluteInvalid:
+    """★★ 占用率是**中性观测**，绝不能把正常轮次标成 invalid。"""
+
+    def test_ctx_merge_is_a_plain_update(self, src: str):
+        """合并语句必须是 `{**(meta or {}), **ctx}` —— 不得夹带 `invalid`。"""
+        assert 'meta = {**(meta or {}), **ctx}' in src, (
+            "ctx 合并方式变了 ⇒ 复核是否会把正常轮次标成 invalid（污染「连续无效」计数）"
+        )
+
+    def test_invalid_only_from_notice(self, src: str):
+        """`invalid: True` 只能由 `notice` 触发（原语义不得被改动）。"""
+        assert 'meta = {"invalid": True, "notice": notice} if notice else None' in src
+
+    def test_helper_rejects_non_int(self, src: str):
+        """三个数都必须过 `isinstance(..., int)` —— 脏 meta 不能抛出（否则整页历史 500）。"""
+        body = src.split("def _ctx_usage_from_done(")[1].split("def _ctx_usage_from_events(")[0]
+        assert body.count("isinstance(") >= 3, "字段校验不足 ⇒ 脏数据可能让历史接口 500"
+        assert "> 0" in body, "须排除 0/负值（无用且会显示成 0%）"
