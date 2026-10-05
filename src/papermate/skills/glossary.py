@@ -1,0 +1,185 @@
+"""PaperMate · glossary 技能（P0 术语表，docs/统一方案 阶段C）
+
+命令：/术语表 /glossary
+编排：从关联文档所有 chunk 文本抽取缩写/术语候选（正则），定位每个术语首次出现的上下文，
+真实 LLM 生成术语表；fake 下退化为「候选术语 + 首次出现页 + 上下文」确定性表（绝不臆造）。
+依赖：ctx.doc_svc（检索）+ ctx.llm（生成）；feature=glossary 门控（满足 LLM 模块开关硬约束）。
+"""
+
+from __future__ import annotations
+
+import re
+
+from lightcore.llm.base import ChatMessage, Role
+from lightcore.skills.spec import SkillContext, SkillResult, SkillSpec
+from papermate.skills._common import is_real_llm, resolve_doc_scope
+
+# 缩写候选：2–6 个连续大写字母（排除常见非术语连词/机构名）
+_ABBR_PAT = re.compile(r"\b[A-Z]{2,6}\b")
+_COMMON_ABBR = {"AND", "OR", "NOT", "THE", "FOR", "IEEE", "ACM", "USA", "UK", "ETC"}
+# 括号定义：全称（中文/英文）(Abbreviation) 形式，如「卷积神经网络（CNN）」
+_PAREN_DEF_PAT = re.compile(
+    r"([\u4e00-\u9fa5A-Za-z][\u4e00-\u9fa5A-Za-z0-9\-]{1,20})[（(]([A-Za-z][A-Za-z0-9\- ]{1,30})[)）]"
+)
+# 中文专业术语：以常见技术后缀结尾的中文名词短语（4–20 字），如「旋转框遥感图像目标检测模型」
+_CN_TECH_SUFFIXES = [
+    "模型", "方法", "算法", "网络", "神经网络", "框架", "机制", "模块",
+    "损失", "注意力", "检测", "分类", "回归", "池化", "标签", "边界框",
+    "目标检测", "图像", "遥感", "特征提取", "卷积", "学习", "优化",
+    "采样", "融合", "注意力机制", "特征金字塔", "锚框", "激活函数",
+    "数据增强", "轻量化", "旋转框", "水平框", "数据集",
+]
+_CN_TERM_PAT = re.compile(
+    r"([\u4e00-\u9fa5]{2,18}(?:" + "|".join(re.escape(s) for s in sorted(_CN_TECH_SUFFIXES, key=len, reverse=True)) + r"))"
+)
+_CN_STOPWORDS = {
+    "本文提出", "本文方法", "实验结果", "结果表明", "结果显示", "综上所述",
+    "因此", "所以", "由于", "但是", "然而", "此外", "同时", "随着", "因为",
+    "为了", "可以", "进行", "使用", "通过", "基于", "采用", "提出", "设计",
+    "实现", "完成", "取得", "达到", "具有", "存在", "能够", "需要", "应该",
+    "性能", "精度", "效果", "实验", "研究", "工作", "领域", "任务", "问题",
+    "技术", "系统", "应用", "过程", "部分", "方面", "情况", "水平", "不同",
+}
+
+_MAX_TERMS_FALLBACK = 25  # 确定性回退表最多展示条数
+_MAX_TERMS_LLM = 30       # 喂给真实 LLM 的术语上限
+
+
+def _collect_chunks(pipe) -> list[dict]:
+    try:
+        chunks = pipe.get_chunks()
+    except Exception:  # noqa: BLE001
+        return []
+    return [
+        {"id": getattr(c, "id", None), "page": getattr(c, "page", None), "text": getattr(c, "text", "")}
+        for c in chunks
+    ]
+
+
+def _extract_terms(chunk_texts: list[str]) -> list[dict]:
+    """抽取候选术语：括号定义对 + 纯缩写 + 中文专业术语。返回去重列表（按出现顺序）。"""
+    seen: set[str] = set()
+    terms: list[dict] = []
+    covered_fulls: set[str] = set()  # 已在括号定义中作为「全称」出现的中文短语
+
+    # 第一轮：括号定义（中文全称 + 英文缩写）与纯英文缩写
+    for t in chunk_texts:
+        for m in _PAREN_DEF_PAT.finditer(t):
+            full, abbr = m.group(1).strip(), m.group(2).strip()
+            if len(abbr) < 2 or abbr in seen or abbr in _COMMON_ABBR:
+                continue
+            seen.add(abbr)
+            covered_fulls.add(full)
+            start = max(0, m.start() - 40)
+            terms.append({"term": abbr, "full": full, "context": t[start:m.end()].replace("\n", " ").strip(), "kind": "abbr"})
+        for ab in _ABBR_PAT.findall(t):
+            if ab in seen or ab in _COMMON_ABBR:
+                continue
+            seen.add(ab)
+            terms.append({"term": ab, "full": "", "context": "", "kind": "abbr"})
+
+    # 第二轮：中文专业术语（未被括号定义覆盖的才加入，避免重复）
+    for t in chunk_texts:
+        for m in _CN_TERM_PAT.finditer(t):
+            cn = m.group(1).strip()
+            if len(cn) < 4 or cn in seen or cn in _CN_STOPWORDS:
+                continue
+            # 若该中文短语已作为某英文缩写的「全称」出现，则跳过
+            if any(cn in f or f in cn for f in covered_fulls):
+                continue
+            seen.add(cn)
+            start = max(0, m.start() - 30)
+            terms.append({"term": cn, "full": "", "context": t[start:m.end()].replace("\n", " ").strip(), "kind": "cn"})
+    return terms
+
+
+async def run(ctx: SkillContext) -> SkillResult:
+    if ctx.doc_svc is None:
+        return SkillResult(ok=False, error="文档服务未就绪")
+    doc_ids, _args = resolve_doc_scope(ctx)  # 2026-09-06：@文档N 提及 → 限缩到该篇
+    if not doc_ids:
+        return SkillResult(ok=False, error="请先在右栏关联至少一篇文档，再执行 /术语表。")
+
+    all_chunks: list[dict] = []
+    for d in doc_ids:
+        pipe = await ctx.doc_svc.get_pipeline(d)
+        if pipe is None:
+            continue
+        all_chunks.extend(_collect_chunks(pipe))
+    if not all_chunks:
+        return SkillResult(ok=False, error="关联文档尚无可解析的文本分块，请确认已成功上传并解析。")
+
+    terms = _extract_terms([c["text"] for c in all_chunks])
+    if not terms:
+        return SkillResult(
+            ok=True,
+            content="## 术语表\n\n未在关联文档中检测到明显缩写或术语（如 `BERT（Bidirectional ...）` 形式）。"
+                    "可直接向我询问某术语的含义，或换更具体的问法。",
+            citations=[],
+        )
+
+    # 定位每个术语首次出现的 chunk（用于上下文/页码/引用溯源）
+    first_seen: dict[str, dict] = {}
+    for c in all_chunks:
+        for term in terms:
+            if term["term"] in (c["text"] or ""):
+                first_seen.setdefault(term["term"], c)
+
+    llm = ctx.llm
+    if not is_real_llm(llm):
+        # 无 key / 演示模型：确定性回退，绝不臆造释义
+        lines = [
+            "## 术语表（确定性回退）", "",
+            "> 当前为演示模型，无法生成释义；下表列出从原文抽取的候选术语（含中文专业术语与英文缩写）及其首次出现位置，供你参考。",
+            "", "| 术语 | 全称/英文 | 首次出现页 | 上下文 |", "|---|---|---|---|",
+        ]
+        for term in terms[:_MAX_TERMS_FALLBACK]:
+            c = first_seen.get(term["term"], {})
+            page = c.get("page")
+            ctx_text = (term.get("context") or (c.get("text") or ""))[:80].replace("\n", " ")
+            lines.append(f"| {term['term']} | {term.get('full') or '—'} | 第 {page} 页 | {ctx_text} |")
+        return SkillResult(ok=True, content="\n".join(lines), citations=[])
+
+    # 真实 LLM：喂候选术语 + 首次出现上下文，生成术语表
+    rows: list[str] = []
+    citations: list[dict] = []
+    for term in terms[:_MAX_TERMS_LLM]:
+        c = first_seen.get(term["term"], {})
+        page = c.get("page")
+        ctx_text = (term.get("context") or (c.get("text") or ""))[:160].replace("\n", " ")
+        rows.append(
+            f"- 术语：{term['term']}（全称：{term.get('full') or '未知'}）；"
+            f"首次出现：第 {page} 页；上下文：{ctx_text}"
+        )
+        if c:
+            citations.append({"id": c.get("id"), "page": page, "text": ctx_text[:160]})
+    prompt = (
+        "你是学术术语助手。基于下方【论文中抽出的术语及其首次出现上下文】，生成一份术语表。\n"
+        "要求：\n"
+        "1. 严格基于提供的上下文，区分「论文自定义术语」与「领域通用术语」；\n"
+        "2. 术语既可能是英文缩写（如 YOLO），也可能是中文专业术语（如 旋转框遥感图像目标检测模型）；"
+        "对中文术语，『缩写/英文』列可填其常见英文表达或『—』；\n"
+        "3. 对一词多义或需结合上下文的缩写注明『需结合上下文』；\n"
+        "4. 给出每个术语的简要中文释义；无法从上下文确定的写『待核实』，严禁编造；\n"
+        "5. 输出 Markdown 表格：| 术语 | 缩写/英文 | 中文释义 | 首次出现页 | 相关概念 |。\n\n"
+        "【术语与上下文】\n" + "\n".join(rows) + "\n\n请输出术语表："
+    )
+    try:
+        resp = await llm.chat([ChatMessage(role=Role.USER, content=prompt)], tools=None, temperature=0.3)
+    except Exception as e:  # noqa: BLE001
+        return SkillResult(ok=False, error=f"术语表生成失败: {e}")
+    content = (resp.message.content or "").strip()
+    if not content:
+        return SkillResult(ok=False, error="术语表生成失败：模型返回为空。")
+    return SkillResult(ok=True, content=content, citations=citations)
+
+
+SPEC = SkillSpec(
+    name="glossary",
+    commands=["/术语表", "/glossary"],
+    description="从关联文档抽取术语/缩写并生成术语表（含释义与首次出现页）",
+    handler=run,
+    feature="glossary",
+    icon="📖",
+    category="研究",
+)

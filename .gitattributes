@@ -1,0 +1,49 @@
+# ===== 换行与二进制处理（2026-10-05 建立）=====
+#
+# ★★ 关键背景（务必先读）：
+#   评测门禁 `dev_eval._stale_reason` 用 `sha256(path.read_bytes())` —— **原始字节**计算
+#   用例集指纹。实测：`eval/cases/golden_real.jsonl` 当前是 CRLF，指纹 fc6e9083f8f8 与
+#   `eval/report_real.json` 匹配（门禁可信）；若被归一化为 LF，指纹变 8750b991e22e
+#   ⇒ 判「用例集已变」⇒ 门禁不出结论、看板报红。
+#   ⇒ 因此**用例集一律 `-text`（不转换）**，其余文本按 LF 归一化。
+#   ⇒ 若将来要把用例集也归一化为 LF，必须**同时重跑评测**刷新 cases_sha256。
+
+# 默认：由 git 判断是否文本（不做强制转换）
+* text=auto
+
+# 源码与文档：仓库内统一 LF（避免 CRLF/LF 混用导致"改一字、diff 全文件"）
+*.py    text eol=lf
+*.ts    text eol=lf
+*.tsx   text eol=lf
+*.js    text eol=lf
+*.mjs   text eol=lf
+*.css   text eol=lf
+*.html  text eol=lf
+*.sh    text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.json  text eol=lf
+*.toml  text eol=lf
+*.md    text eol=lf
+*.txt   text eol=lf
+Dockerfile text eol=lf
+
+# ★ 评测用例集：绝不转换（指纹 = sha256(原始字节)，见上方说明）
+eval/cases/*.jsonl -text
+
+# 二进制：不转换，且 diff 不按文本处理
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.pdf   binary
+*.db    binary
+*.faiss binary
+*.pkl   binary
+*.woff  binary
+*.woff2 binary
+
+# 锁文件：必须入库（保证可复现安装），但 diff 噪声极大 ⇒ 折叠显示
+uv.lock               -diff
+web/package-lock.json -diff

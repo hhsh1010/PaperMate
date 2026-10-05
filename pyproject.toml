@@ -1,0 +1,159 @@
+[project]
+name = "papermate"
+version = "0.1.0"
+description = "PaperMate (论文智友) — 面向科研的学术论文研读 Agent，内核 LightCore 从零自研"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    # Web / API
+    "fastapi>=0.111",               # 含 Starlette；SSE 用 Starlette 原生 StreamingResponse 实现（不引 sse-starlette）
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",       # 环境变量 / .env 配置（密钥不入库）
+    "python-multipart>=0.0.9",      # 表单/文件上传（UploadFile）
+    # 数据层
+    "sqlalchemy>=2.0",
+    # 工具 / 执行
+    "httpx>=0.27",                  # 网络工具（safe/network 分级）
+    # 测试
+    "pytest>=8.2",
+    "pytest-asyncio>=0.23",
+    "pytest-xdist>=3.8",            # T-10：并行跑测试（基线串行 413s → 见 [tool.pytest.ini_options] 的 addopts）
+    "python-docx>=1.2.0",
+    # 检索：BM25 稀疏检索是默认 hybrid 管线的必用组件（bm25.py 顶部无条件 import），
+    # 故为核心依赖，不能放进 [rag] extra——否则 `uv sync` 默认安装后 `uv run` 导入即崩。
+    "rank-bm25>=0.2",                # BM25 稀疏检索（混合检索默认即用）
+]
+
+[project.optional-dependencies]
+# 重依赖：第 0 周 Spike 不需要，后续 M3 RAG 阶段再装
+rag = [
+    "faiss-cpu>=1.8",               # 向量索引（chunks / memories 双索引）
+    "FlagEmbedding>=1.3",           # BGE-M3 官方原生加载（dense/sparse/colbert）。
+                                     # 必须用官方库而非 sentence-transformers：ST 导出的缓存快照
+                                     # 只有 XLM-RoBERTa 稠密底座，无 FlagModel 建模代码，
+                                     # encode(return_sparse=...) 会被 ST 包装器拒（"does not
+                                     # accept additional keyword arguments: ['return_sparse']"）。
+    "sentence-transformers>=2.7,<4", # 仅用于 BGE-reranker 重排（CrossEncoder），不用于 BGE-M3 嵌入
+    "pymupdf>=1.24",                # PDF 解析（M3 解析阶段）
+    "jieba>=0.42",                  # BM25 词级分词：中文按词切分；英文保留整词（修复字符级下英文 BM25 召回弱）。use_jieba 默认开，未装则自动回退字符级。
+    "torch==2.13.0+cu126",         # GPU 构建（RTX 4070 / CUDA 12.4）。PyPI Windows 版恒 CPU-only，必须走 pytorch 官方 cu126 源——见下方 [tool.uv.sources]。
+]
+# 图片内容增强（ER-03 Level 2）：OCR / 表格结构还原 / VLM 图注。
+# 与 rag 分离，避免拖重核心 RAG 安装；启用 figure_enrich 前才需安装。
+figure = [
+    "paddleocr>=3.0",               # 图片 OCR（中文友好）；代码已适配 3.x API（2026-08-25）
+    "paddlepaddle>=3.0",            # PaddleOCR 3.x 推理引擎（paddle_static），不随 paddleocr 自动装
+    "transformers>=4.40",           # Table Transformer 表格结构还原
+    "torch>=2.2",                   # 嵌入/重排/表格还原推理后端；PyPI Windows 默认 CPU 版，GPU 加速装法见 docs/RAG激活与运维清单.md §6
+    "pillow>=10.0",                 # 图片读写
+]
+dev = [
+    "ruff>=0.5",                    # lint（NFR: ruff strict）
+    "mypy>=1.10",                   # 类型检查（NFR: mypy strict）
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lightcore", "src/papermate"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+# eval/ 纳入默认收集（2026-09-15）：它是 A-01 评测体系的指标单测，
+# 原先不在 testpaths 内 → 默认门禁跑不到，指标公式被改坏也不会红。
+testpaths = ["tests", "eval"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# T-10 测试效率（2026-09-30）：并行 + 分层标记
+#
+# ## 为什么是 `-n 3`（这是**实测**出来的安全值，不是拍的）
+# 基线实测（单进程）：**1304 passed / 413.55s**。慢榜 40 条里 **30 条是 setup**、
+# 数值密集在 1.1~1.6s ⇒ 瓶颈是 `client` fixture 每次 `create_app()` ≈ 1.2s，
+# 而全库 **≈293 个测试带 client** ⇒ ≈350s（85%）是**串行累加**，不是"测试本身慢"。
+# ⇒ 唯一有效的杠杆是**并行**（标记 slow 只能省 ~17s）。
+#
+# ⚠️⚠️ **并行度由内存决定，而实测占用远超直觉**（2026-09-30 逐档实测）：
+#
+#   | 并行度   | 结果                                                        |
+#   |----------|-------------------------------------------------------------|
+#   | `auto`   | 24 逻辑核 ⇒ 进程数≈24 ⇒ **必然 OOM**（禁用）                  |
+#   | `-n 6`   | 跑到 814 passed 后有 1 个 worker 崩（`stack overflow`）       |
+#   | `-n 4`   | 37s 内可用内存 7.6GB → **612MB**，仍崩（`[gw1] node down`）    |
+#   | **`-n 3`** | ✅ **1304 passed / 118.83s**，fatal=0 · node down=0          |
+#
+#   · ★ **worker 启动峰值 ≈1.75GB**（不是稳态的 960MB）：多个 worker 同时
+#     import fastapi / sqlalchemy / numpy / pymupdf 即触顶。
+#   · ★ 崩溃形态：**内存耗尽 ⇒ 栈扩展失败 ⇒ Windows `stack overflow`**
+#     （内存更紧时还会 `0x80070005` ACCESS_DENIED），且**遗留孤儿进程**（实测遗留
+#     8 个 960MB 进程，须手工清理；`data/backups` 也会留下 0 字节 `tmp*.tmp`）。
+#   · ★★ 还有"**同一条命令被执行两遍**"的环境风险：本开发环境的沙箱会**重放 Bash
+#     命令** ⇒ 两套 worker 同时跑 ⇒ 直接触顶。（`-n 8` 实测就是这么崩的。）
+#   ⇒ **结论**：保持 `-n 3`。跑前请关掉浏览器/视频类应用（本机 15.7GB，
+#     WorkBuddy 常占 ~3.9GB），并**不要同时开两个 pytest**（用 `scripts/run_tests.py`）。
+#   ⇒ **诚实边界**：413.55s → 118.83s（**-71%**）已达标"大幅提速"，但**未达卡片
+#     写的 ≤90s** —— 受本机内存硬约束（再提并行度即崩）。要 ≤90s 需先释放内存
+#     （关掉常驻应用）或给每个 worker 减重。
+#
+# ## 为什么用 `--dist=loadfile`
+# 保证**同一文件的测试留在同一 worker**，从而与串行时的"文件内隐式顺序"
+# （env 设置、module 级 fixture）语义一致。全库仅 2 处 module 级 fixture
+# （tests/test_pagination_and_recovery.py），但保守起见仍按文件分发。
+#
+# ## ⚠️ 为什么 addopts **不**放 `-m "not slow"`（有意偏离 T-10 卡片）
+# 卡片步 2 建议"addopts 默认排除易慢项"。**否决**：默认排除 = 默认漏测 ⇒
+# 日后 `pytest` 裸跑会**静默跳过 slow 用例**，正是项目教义禁止的「假通过」。
+# 故：**默认 = 全量（一个不落）**；跳过得由人**显式**写 `-m "not slow"`。
+#
+# 三条命令（`scripts/run_tests.py` = 带单实例锁的启动器，防两套 worker 撞内存）：
+#   日常     `python scripts/run_tests.py -m "not slow"`   （跳过重型用例）
+#   交付前   `python scripts/run_tests.py`                 （全量，含 slow）
+#   排障     `... -n 0`                                    （退回串行，定位 flaky）
+# ⚠️ 关闭并行**不能用** `-p no:xdist`：那会连 `-n` 选项一起没收，直接报
+#    `error: unrecognized arguments: -n --dist=loadfile`（2026-09-30 实测）。用 `-n 0`。
+addopts = "-n 3 --dist=loadfile"
+
+# 分层标记：**只标注"需要什么资源"，不改变用例本身**（用例数不减）。
+markers = [
+    "slow: 单条 call 阶段 >1s 或纯等待型（sleep/取消机制）用例；日常门禁可用 -m \"not slow\" 跳过",
+    "gpu: 需要真实 GPU 或真实模型权重（BGE-M3 / CrossEncoder）",
+    "network: 需要真实外网或真实厂商 API（无 key/无网时应跳过而非失败）",
+]
+# ⚠️ 关于 pytest 临时目录残留（2026-09-21 实测，**不要**试图用配置解决）
+#
+# 现象：`%TEMP%\pytest-of-<user>\` 会累积大量 `garbage-*` 目录（实测 547 MB / 836 个）。
+# 成因：pytest 把超期运行目录改名 `garbage-*` 后**尝试删除**，而本开发环境的
+#       safe-delete 垫片会**拦截批量删除** → 只改名、删不掉 → 永久残留。
+#
+# 试过但**无效**：`tmp_path_retention_count = 0`（实测跑一次测试反增 4 个 garbage）。
+# 根本原因是"删除被外部拦截"，属**环境约束**，配置层面解决不了。
+#
+# 可行的做法是行为层面：
+#   1. **少跑全量**（用针对性测试代替；全量只在交付前跑一次）；
+#   2. 定期清理存量 → `python scripts/clean_pytest_tmp.py`（默认 dry-run，分批删）；
+#   3. 想一次清完，在资源管理器里手动删 `garbage-*`（用户操作不受垫片约束，最省事）。
+
+# torch GPU 构建锁定：PyPI 的 Windows torch 恒为 CPU-only，GPU 轮子只在 pytorch 官方 cu126 源。
+# 用 explicit index + source 重定向，使 `uv sync` 自动从 cu126 源拉 GPU 构建，避免被换回 CPU 版。
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu126" }]
