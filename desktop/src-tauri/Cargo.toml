@@ -6,6 +6,17 @@ authors = ["PaperMate"]
 edition = "2021"
 rust-version = "1.77"
 
+# ★ Tauri 2 官方模板形状（此前缺失，导致 `main.rs` 报
+#   E0433: cannot find module or crate `papermate_desktop_lib`）：
+#   包名是 `papermate-desktop`（连字符）⇒ lib 会被自动命名为 `papermate_desktop`，
+#   而 main.rs 写的是 `papermate_desktop_lib::run()` ⇒ 名字对不上。
+#   官方模板刻意让 lib 名与 bin 名不同（`_lib` 后缀），既避免 `cdylib` 产物
+#   （xxx.dll）与 bin（xxx.exe）同名冲突，也为移动端留出入口。
+#   crate-type 三项同官方模板：staticlib/cdylib 供移动端，rlib 供 bin 链接。
+[lib]
+name = "papermate_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

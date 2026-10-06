@@ -1,5 +1,4 @@
 use std::fs;
-use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::sync::Mutex;
 
@@ -22,27 +21,50 @@ const HEAVY_DEPS: [&str; 3] = ["torch", "FlagEmbedding", "sentence-transformers"
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    // ★ Tauri 2 的 API 形状（已按 tauri-2.12.1 源码逐一核对，不是照记忆写的）：
+    //   · `Builder::run(self, context)` —— **只接受 context，没有回调参数**
+    //     （app.rs:2616）
+    //   · `App::run<F: FnMut(&AppHandle<R>, RunEvent) + 'static>(self, callback: F)`
+    //     —— **处理 RunEvent 的两参回调在这**（app.rs:1384）
+    //   · `App::handle(&self) -> &AppHandle<R>`（app.rs:1279）
+    //   · setup 闭包收到的 `app` 是 `&mut App`（不是 `&AppHandle`）
+    //   ⇒ 所以流程是 build → 拿到 App → 再 run(callback)。
+    let built = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
-            bootstrap_and_spawn(app);
+            // 引导逻辑只需要 `&AppHandle` ⇒ 用 `app.handle()` 取句柄。
+            // （直接传 `app` 会报 expected `&AppHandle`, found `&mut App`）
+            bootstrap_and_spawn(app.handle());
             Ok(())
         })
-        .run(tauri::generate_context!(), |_app, event| {
-            // 窗口关闭 → 杀掉 Python sidecar，避免 8000 端口残留
-            if let tauri::RunEvent::ExitRequested { .. } = event {
-                if let Some(mut child) = BACKEND.lock().unwrap().take() {
-                    let _ = child.kill();
-                }
+        .build(tauri::generate_context!());
+
+    let app = match built {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("[desktop] failed to build Tauri app: {}", e);
+            return;
+        }
+    };
+
+    app.run(|_app_handle, event| {
+        // 窗口关闭 → 杀掉 Python sidecar，避免 8000 端口残留
+        if let tauri::RunEvent::ExitRequested { .. } = event {
+            if let Some(mut child) = BACKEND.lock().unwrap().take() {
+                let _ = child.kill();
             }
-        });
+        }
+    });
 }
 
 fn bootstrap_and_spawn(app: &tauri::AppHandle) {
+    // ⚠️ Tauri 2.12 起 `resource_dir()` / `local_data_dir()` 返回 **Result<PathBuf, Error>**
+    //    而不是早期的 `Option<PathBuf>`（源码 path/desktop.rs:230 / :86）。
+    //    按 `Some/None` 匹配会报 expected `Result<_, Error>`, found `Option<_>` ⇒ 必须匹配 Ok/Err。
     let res_dir = match app.path().resource_dir() {
-        Some(p) => p,
-        None => {
-            eprintln!("[desktop] resource_dir unavailable");
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("[desktop] resource_dir unavailable: {}", e);
             return;
         }
     };
@@ -51,9 +73,9 @@ fn bootstrap_and_spawn(app: &tauri::AppHandle) {
     let uv_exe = res_dir.join("resources/python/uv.exe");
 
     let local_data = match app.path().local_data_dir() {
-        Some(p) => p.join(APP_DATA),
-        None => {
-            eprintln!("[desktop] local_data_dir unavailable");
+        Ok(p) => p.join(APP_DATA),
+        Err(e) => {
+            eprintln!("[desktop] local_data_dir unavailable: {}", e);
             return;
         }
     };
