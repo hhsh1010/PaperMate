@@ -915,3 +915,59 @@ class DocScopeOut(BaseModel):
     force_retrieval: bool
     #: `general`（0 篇，通用对话）/ `single`（1 篇）/ `multi`（≥2 篇，默认检索全部）
     mode: str
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 真实语义检索模型的显式安装（2026-10-05 桌面客户端）
+# 契约：GET  /api/v1/settings/rag/models              清单 + 安装状态
+#       POST /api/v1/settings/rag/models/install      触发下载（后台线程）
+#       POST /api/v1/settings/rag/models/install/cancel 取消
+#       GET  /api/v1/settings/rag/models/install/status  轮询进度
+# ─────────────────────────────────────────────────────────────────────────────
+class RagModelItem(BaseModel):
+    """单个本地模型的清单项。"""
+
+    key: str                      # embedder | reranker
+    repo_id: str
+    label: str
+    approx_gb: float              # 预计体积（提示用，非精确值）
+    #: 本机是否已有**可用**快照（判定口径与线上推理同源：`hf_local.resolve_local_hf_snapshot`）
+    installed: bool
+    local_path: str | None = None
+
+
+class RagModelsOut(BaseModel):
+    """设置页「语义检索」卡片的首屏数据。"""
+
+    models: list[RagModelItem]
+    all_installed: bool           # 两个都就绪 ⇒ 可以启用 real
+    enabled: bool                 # 当前 runtime settings 的 rag_embedder == real
+    embedder: str                 # 当前生效值（fake | real）
+    disk_free_gb: float | None    # HF 缓存盘余量（无法探测时为 None）
+    hint: str                     # 面向用户的下一步提示（含"必须重建索引"）
+
+
+class RagInstallReq(BaseModel):
+    """触发安装。`models` 为空 ⇒ 装全部。"""
+
+    models: list[str] | None = None
+
+
+class RagInstallStatusOut(BaseModel):
+    """安装任务状态（轮询用）。
+
+    ⚠️ `percent` 是**文件数进度**（非字节进度）：HF 下载以文件为单位，
+    单个 2GB 权重在下完之前这一档不会动 —— 前端请把文案写成「正在下载第 i/N 个文件」，
+    不要显示会中途跳变的百分比条。
+    """
+
+    status: str          # idle | running | success | cancelled | error
+    models: list[str]
+    current: str | None = None
+    current_file: str | None = None
+    file_index: int = 0
+    file_total: int = 0
+    percent: float = 0.0
+    message: str = ""
+    error: str | None = None
+    elapsed_s: float = 0.0

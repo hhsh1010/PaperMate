@@ -35,6 +35,8 @@ import type {
   WorkspaceOut,
   UploadProgress,
   PromptEnhanceResult,
+  RagInstallStatus,
+  RagModelsOut,
   UsageRow,
   UsageTrendOut,
 } from "../lib/types";
@@ -498,6 +500,30 @@ export const api = {
   /** 本地数据管理：工具与技能清单 */
   async getInventory(): Promise<InventoryOut> {
     return json(await fetch(`${BASE}/settings/inventory`));
+  },
+
+  // ── 真实语义检索模型的显式安装（2026-10-05：App 装完默认 fake，由用户主动下载）──
+  async getRagModels(): Promise<RagModelsOut> {
+    return json(await fetch(`${BASE}/settings/rag/models`));
+  },
+
+  /** 触发后台下载（立即返回任务状态，前端轮询 installStatus） */
+  async installRagModels(models?: string[]): Promise<RagInstallStatus> {
+    return json(
+      await fetch(`${BASE}/settings/rag/models/install`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(models && models.length ? { models } : {}),
+      }),
+    );
+  },
+
+  async cancelRagInstall(): Promise<RagInstallStatus> {
+    return json(await fetch(`${BASE}/settings/rag/models/install/cancel`, { method: "POST" }));
+  },
+
+  async ragInstallStatus(): Promise<RagInstallStatus> {
+    return json(await fetch(`${BASE}/settings/rag/models/install/status`));
   },
 
   async getSettings(): Promise<AppSettings> {

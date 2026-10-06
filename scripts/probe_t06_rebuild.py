@@ -33,7 +33,8 @@ def _prepare_env() -> Path:
     os.environ["PAPERMATE_DATA_DIR"] = str(tmp)
     os.environ["PAPERMATE_PREWARM"] = "0"
     # 真实 embedder（不设 fake —— fake 测不出真实耗时）
-    os.environ.pop("PAPERMATE_DEFAULT_EMBEDDER", None)
+    # 2026-10-05：config 默认值已改为 fake ⇒ 必须**显式写 real**（同上，原 pop 写法已失效）
+    os.environ["PAPERMATE_DEFAULT_EMBEDDER"] = "real"
     os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
     return tmp
 

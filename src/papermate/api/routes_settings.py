@@ -22,7 +22,20 @@ from lightcore.llm.router import (
 
 from ..memory_hub import reset_memory_manager
 from ..runtime_settings import get_state, public_view, rules_token_limit, update
-from ..schemas import InventoryOut, SettingsOut, SettingsTestOut, WebSearchTestOut
+from ..schemas import (
+    InventoryOut,
+    RagInstallReq,
+    RagInstallStatusOut,
+    RagModelsOut,
+    SettingsOut,
+    SettingsTestOut,
+    WebSearchTestOut,
+)
+from ..services.model_installer import (
+    AlreadyRunning,
+    ModelInstallError,
+    get_model_installer,
+)
 
 router = APIRouter()
 
@@ -303,6 +316,51 @@ async def get_balances() -> dict:
             out[provider] = {"available": False,
                              "reason": "Qwen 余额查询需阿里云 AK/SK（当前仅配置了 DashScope Key），可在阿里云控制台查看"}
     return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 真实语义检索模型的**显式安装**（2026-10-05 桌面客户端需求）
+#
+# 语义：App 装完默认是 fake（零下载）⇒ 用户在设置页**主动**点下载 ⇒ 下载完
+#      **也不自动启用**（切成 real 会让既有索引失效，必须"手动启用 + 重建索引"，
+#       这个代价要让用户在知情时自己触发）。故这里只管下载，不改任何运行时配置。
+# 线程：下载跑在**后台线程**（数 GB / 分钟级），路由立即返回；前端轮询 status。
+# ─────────────────────────────────────────────────────────────────────────────
+@router.get("/settings/rag/models", response_model=RagModelsOut)
+def rag_models() -> dict:
+    """语义检索模型清单 + 本机安装状态 + 是否启用 + 磁盘余量。"""
+    return get_model_installer().models()
+
+
+@router.post("/settings/rag/models/install", response_model=RagInstallStatusOut)
+def install_rag_models(body: RagInstallReq | None = None) -> dict:
+    """触发后台下载（立即返回，前端轮询 `/install/status`）。
+
+    - 400：未知模型名 / 磁盘不足 / 仓库不可达等（消息可直接展示）；
+    - 409：已有任务在跑（前端应先禁用按钮或提示先取消）。
+    """
+    keys = body.models if body else None
+    try:
+        return get_model_installer().install(keys)
+    except AlreadyRunning as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except ModelInstallError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.post("/settings/rag/models/install/cancel", response_model=RagInstallStatusOut)
+def cancel_rag_models_install() -> dict:
+    """取消当前下载（在**下一个文件开始前**生效，已缓存部分会保留以便续传）。"""
+    try:
+        return get_model_installer().cancel()
+    except ModelInstallError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+
+
+@router.get("/settings/rag/models/install/status", response_model=RagInstallStatusOut)
+def rag_models_install_status() -> dict:
+    """轮询安装进度。首次安装的初始状态为 `idle`。"""
+    return get_model_installer().task()
 
 
 @router.get("/settings/inventory", response_model=InventoryOut)
