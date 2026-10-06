@@ -8,6 +8,10 @@
 hub 缓存快照里。本模块把该快照目录解析成本地路径——transformers / FlagEmbedding
 对本地目录直接 ``from_pretrained``，**不会发起任何网络请求**。
 
+⚠️ 缓存根目录的解析**必须**走 ``default_hub_cache_dir()``（读 ``HF_HUB_CACHE`` / ``HF_HOME``），
+不可硬编码 ``~``：桌面端把 ``HF_HOME`` 指向 ``%LOCALAPPDATA%``，硬编码会导致
+「下载在一处、探测在另一处」的静默失效（2026-10-06 首装仿真实测发现）。
+
 用途：让 BGE-M3 嵌入器与 BGE-reranker 重排器都走「本地优先」，彻底摆脱下载/超时。
 """
 
@@ -54,12 +58,35 @@ def auto_device() -> str:
         return "cpu"
 
 
+def default_hub_cache_dir() -> str:
+    """HF **hub 缓存**目录（与 ``huggingface_hub`` 自身的解析口径一致）。
+
+    优先级：
+      1. ``HF_HUB_CACHE``（最具体，huggingface_hub 的第一顺位）；
+      2. ``HF_HOME`` + ``hub``（huggingface_hub 的默认布局）；
+      3. ``~/.cache/huggingface/hub``（两者都未设时的默认）。
+
+    ★★ 2026-10-06：这三个 env **必须**被尊重，不能硬编码 ``~``。
+       桌面客户端把 ``HF_HOME`` 指向 ``%LOCALAPPDATA%/PaperMate/huggingface``（见
+       ``desktop/src-tauri/src/lib.rs``），而实际下载也落在那里。若此处仍去 ``~`` 下找，
+       就会发生**「下载在一处、探测在另一处」** ⇒ 设置页误报"权重已就绪"，用户启用 real
+       后却加载失败 —— 属于典型的**静默失效**，且在开发机（有 ``~`` 缓存）上完全测不出来。
+    """
+    hub = os.environ.get("HF_HUB_CACHE", "").strip()
+    if hub:
+        return os.path.abspath(os.path.expanduser(hub))
+    home = os.environ.get("HF_HOME", "").strip()
+    if home:
+        return os.path.join(os.path.abspath(os.path.expanduser(home)), "hub")
+    return os.path.expanduser("~/.cache/huggingface/hub")
+
+
 def resolve_local_hf_snapshot(repo_id: str, env_var: str | None = None) -> str | None:
     """解析 ``repo_id`` 在本机 HF hub 缓存中的完整快照目录，找不到返回 ``None``。
 
     优先级：
       1. 环境变量 ``env_var`` 显式指定的目录（需含 ``config.json``）；
-      2. ``~/.cache/huggingface/hub/models--<org>--<name>/snapshots/*`` 下
+      2. ``default_hub_cache_dir()`` 下 ``models--<org>--<name>/snapshots/*`` 的
          **最新**且「config.json + 权重」齐备的快照。
 
     ``env_var`` 指向的目录不合法时只告警并继续探测缓存，不抛异常（不阻断加载）。
@@ -73,7 +100,7 @@ def resolve_local_hf_snapshot(repo_id: str, env_var: str | None = None) -> str |
             logger.warning("环境变量 %s=%s 不是含 config.json 的模型目录，忽略并回退缓存探测", env_var, explicit)
 
     safe = repo_id.replace("/", "--")
-    root = os.path.expanduser(f"~/.cache/huggingface/hub/models--{safe}/snapshots")
+    root = os.path.join(default_hub_cache_dir(), f"models--{safe}", "snapshots")
     if not os.path.isdir(root):
         logger.info("HF 模型 %s：无 hub 缓存目录 %s（需联网下载）", repo_id, root)
         return None

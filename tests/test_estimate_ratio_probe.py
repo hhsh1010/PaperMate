@@ -100,7 +100,7 @@ class TestAnalysisScript:
         from pathlib import Path
 
         sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-        from probe_estimate_ratio import parse, verdict  # noqa: PLC0415
+        from probe_estimate_ratio import parse  # noqa: PLC0415
 
         p = self._write(tmp_path, [
             self._line("model-a", 1.05), self._line("model-a", 1.10, 2),
