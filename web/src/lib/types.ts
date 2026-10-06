@@ -717,6 +717,47 @@ export interface AppSettings {
   providers: Record<string, ProviderPublic>;
 }
 
+/** —— 真实语义检索模型的**显式安装**（2026-10-05 桌面客户端）——
+ * App 装完默认 fake（绝不静默拉 ~4.5GB 权重）；用户在设置页主动点下载，
+ * 下载完**也不自动启用** —— 切成 real 会让既有索引失效，需「手动启用 + 重建索引」。 */
+export interface RagModelItem {
+  key: string;              // embedder | reranker
+  repo_id: string;
+  label: string;
+  /** 预计体积（GB，仅用于提示，非精确值） */
+  approx_gb: number;
+  /** 本机是否已有可用快照（判定口径与线上推理同源） */
+  installed: boolean;
+  local_path: string | null;
+}
+
+export interface RagModelsOut {
+  models: RagModelItem[];
+  all_installed: boolean;
+  /** 当前是否已启用真实语义（rag_embedder === "real"） */
+  enabled: boolean;
+  embedder: string;
+  /** HF 缓存盘余量（GB）；无法探测时为 null */
+  disk_free_gb: number | null;
+  /** 面向用户的下一步提示（含「必须重建索引」） */
+  hint: string;
+}
+
+export interface RagInstallStatus {
+  status: "idle" | "running" | "success" | "cancelled" | "error";
+  models: string[];
+  current: string | null;
+  current_file: string | null;
+  file_index: number;
+  file_total: number;
+  /** ⚠️ **文件数进度**（非字节进度）：单个 2GB 权重在下完之前这一档不会跳，
+   *  前端文案请写成「正在下载第 i/N 个文件」，不要用它驱动百分比条。 */
+  percent: number;
+  message: string;
+  error: string | null;
+  elapsed_s: number;
+}
+
 /** POST /api/v1/documents/precheck 返回：上传前重复检测结果 */
 export interface PrecheckResult {
   duplicate: boolean;

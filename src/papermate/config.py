@@ -27,7 +27,15 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 8000
     default_model: str = "fake"  # fake | deepseek | openai | qwen
-    default_embedder: str = "real"  # fake | real(BGE-M3)
+    # ★ 2026-10-05（桌面客户端需求）：**首次安装默认是 fake**。
+    #   它是「首次运行（还没有 provider_settings.json）时的种子值」，不是"强制值"：
+    #   - 桌面 App：装完即用、**绝不静默下载 ~4GB 权重**；要用真实语义检索，由用户在
+    #     设置页**显式点下载**（`POST /api/v1/settings/rag/models/install`）后再手动启用。
+    #   - 服务端 Docker 部署想首启即 real：设 `PAPERMATE_DEFAULT_EMBEDDER=real`（env 仍优先）。
+    #   - 老用户不受影响：`provider_settings.json` 里已持久化的 `rag_embedder` 优先于种子。
+    #   ⚠️ 为什么不动 `runtime_settings._default_state()`：那里硬编码 "fake" 会让上面这个 env
+    #      **静默失效**（变成"死配置项"），而 cfg 才是这枚种子的**唯一来源**（第 88 行读的就是它）。
+    default_embedder: str = "fake"  # fake | real(BGE-M3，需 ~4GB 权重，设置页显式安装后启用)
     # BGE-M3 稀疏向量增强（与 BM25 并行的词法信号，同向量空间融合更一致）。
     # 已验证真实 BGE-M3 在 GPU 上可加载、稠密/稀疏编码正常（dim=1024, sparse 非空），
     # 设置页默认启用，后端与 UI 对齐为默认开启；测试环境通过 env 回退 fake 避免加载权重。

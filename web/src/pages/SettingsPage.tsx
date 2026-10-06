@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api/client";
-import type { AppSettings, FigureEnrichDeps, InventoryOut, ProviderBalance, SessionOut } from "../lib/types";
+import type {
+  AppSettings,
+  FigureEnrichDeps,
+  InventoryOut,
+  ProviderBalance,
+  RagInstallStatus,
+  RagModelsOut,
+  SessionOut,
+} from "../lib/types";
 import { useLang } from "../lib/i18n";
 import { MemoryPanel } from "../components/MemoryPanel";
 import { SectionCard } from "../components/SectionCard";
@@ -117,6 +125,13 @@ export function SettingsPage() {
   const [balances, setBalances] = useState<Record<string, ProviderBalance> | null>(null);
   const [inventory, setInventory] = useState<InventoryOut | null>(null);
   const [invError, setInvError] = useState<string | null>(null);
+
+  // ---- 真实语义检索模型的**显式安装**（2026-10-05 桌面客户端）----
+  // 语义：App 装完默认 fake（零下载）⇒ 用户在此**主动**下载 ⇒ 下载完仍需手动把
+  //      「嵌入模式」切到 real 并**重建索引**才生效（这里只管下载，不偷偷改任何配置）。
+  const [ragModels, setRagModels] = useState<RagModelsOut | null>(null);
+  const [ragModelsErr, setRagModelsErr] = useState<string | null>(null);
+  const [ragInstall, setRagInstall] = useState<RagInstallStatus | null>(null);
 
   /* ---- 大弹窗内的左侧导航（WorkBuddy 风格：左清单 + 右内容）----
      默认展示第 0 项「模型与厂商」；点击左侧类别时右侧仅展示对应内容（其余不展示）。 */
@@ -256,6 +271,56 @@ export function SettingsPage() {
       setInvError(null);
     } catch (e: unknown) {
       setInvError(toErrorMessage(e) || "加载失败");
+    }
+  };
+
+  const refreshRagModels = async () => {
+    try {
+      const [m, s] = await Promise.all([api.getRagModels(), api.ragInstallStatus()]);
+      setRagModels(m);
+      setRagInstall(s);
+      setRagModelsErr(null);
+    } catch (e: unknown) {
+      setRagModelsErr(toErrorMessage(e) || (lang === "zh" ? "加载失败" : "Load failed"));
+    }
+  };
+
+  // 仅在进入「检索增强」分区时拉取（避免每次打开设置页都白打两个请求）
+  useEffect(() => {
+    if (activeSec === 8) void refreshRagModels();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSec]);
+
+  // 下载进行中：每 2s 轮询。**不用 SSE** —— 下载是后台线程的一次性长任务，
+  // 断连重连语义比轮询复杂，而这里 2s 粒度完全够（单个权重文件要下好几分钟）。
+  useEffect(() => {
+    if (ragInstall?.status !== "running") return;
+    const timer = window.setInterval(async () => {
+      try {
+        const s = await api.ragInstallStatus();
+        setRagInstall(s);
+        if (s.status !== "running") await refreshRagModels();
+      } catch {
+        /* 轮询的单次失败不打扰用户，下一拍自动重试 */
+      }
+    }, 2000);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ragInstall?.status]);
+
+  const startRagInstall = async (keys?: string[]) => {
+    try {
+      setRagInstall(await api.installRagModels(keys));
+    } catch (e: unknown) {
+      setGlobalMsg({ kind: "err", text: toErrorMessage(e) || (lang === "zh" ? "启动下载失败" : "Failed to start") });
+    }
+  };
+
+  const cancelRagInstall = async () => {
+    try {
+      setRagInstall(await api.cancelRagInstall());
+    } catch (e: unknown) {
+      setGlobalMsg({ kind: "err", text: toErrorMessage(e) || (lang === "zh" ? "取消失败" : "Cancel failed") });
     }
   };
 
@@ -975,6 +1040,99 @@ export function SettingsPage() {
             ? "切换 embedding 模式与关键词检索口径；改后务必点「重建索引」使新配置对所有文档生效。"
             : "Switch embedding mode & lexical settings; reindex after changing to apply to all docs."}
         >
+            {/* ── 真实语义检索模型（2026-10-05：**必须由用户显式下载**）──
+                为什么单独一块：两条ธุร线不同 —— 上面是"改配置"，这里是"拉资产"，
+                后者涉及约 4.5GB 下载与"不重建索引就不生效"的代价，必须让用户看得见、能取消。 */}
+            <div className="settings-field">
+              <span className="settings-label">{lang === "zh" ? "语义检索模型（约 4.5GB）" : "Semantic retrieval models (~4.5GB)"}</span>
+              {ragModelsErr && <span className="settings-hint">{ragModelsErr}</span>}
+              {ragModels && (
+                <ul className="settings-hint" style={{ margin: 0, paddingLeft: "1.1em", listStyle: "disc" }}>
+                  {ragModels.models.map((m) => (
+                    <li key={m.key}>
+                      <b>{m.label}</b>
+                      {" · "}
+                      {m.installed
+                        ? (lang === "zh" ? "已安装" : "installed")
+                        : (lang === "zh" ? `未安装（约 ${m.approx_gb}GB）` : `not installed (~${m.approx_gb}GB)`)}
+                      {m.local_path ? <span style={{ opacity: 0.7 }}> · {m.local_path}</span> : null}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {ragModels && ragModels.disk_free_gb != null && (
+                <span className="settings-hint">
+                  {lang === "zh" ? `缓存盘可用 ${ragModels.disk_free_gb}GB` : `Disk free: ${ragModels.disk_free_gb}GB`}
+                </span>
+              )}
+              <span className="settings-hint">{ragModels?.hint ?? ""}</span>
+            </div>
+
+            {ragInstall && ragInstall.status === "running" ? (
+              <div className="reindex-viz" role="status" aria-live="polite">
+                <div className="reindex-bar-track">
+                  <div
+                    className={`reindex-bar${ragInstall.file_total === 0 ? " indeterminate" : ""}`}
+                    style={{
+                      width: ragInstall.file_total > 0
+                        ? `${Math.round((Math.min(ragInstall.file_index, ragInstall.file_total) / ragInstall.file_total) * 100)}%`
+                        : "100%",
+                    }}
+                  />
+                </div>
+                <div className="reindex-meta">
+                  {/* ⚠️ 显示的是**文件数**进度：单个 2GB 权重在下完之前这一格不会动，
+                      所以文案必须写"第 i/N 个文件"，不能假装是字节百分比。 */}
+                  <span>
+                    {ragInstall.message}
+                    {ragInstall.file_total > 0
+                      ? `（${ragInstall.file_index}/${ragInstall.file_total}）`
+                      : ""}
+                  </span>
+                  {ragInstall.elapsed_s > 0 && <span> · {Math.round(ragInstall.elapsed_s)}s</span>}
+                </div>
+                <div className="settings-actions">
+                  <button type="button" className="settings-btn-ghost" onClick={cancelRagInstall}>
+                    {lang === "zh" ? "取消下载" : "Cancel"}
+                  </button>
+                  <span className="settings-hint">
+                    {lang === "zh" ? "取消后已下载的部分会被缓存，下次继续。" : "Cached progress is kept for resume."}
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <div className="settings-actions">
+                <button
+                  type="button"
+                  className="btn-primary"
+                  disabled={!ragModels || ragModels.all_installed}
+                  onClick={() => startRagInstall()}
+                >
+                  {ragModels?.all_installed
+                    ? (lang === "zh" ? "模型已就绪" : "Models ready")
+                    : (lang === "zh" ? "下载模型" : "Download models")}
+                </button>
+                <span className="settings-hint">
+                  {lang === "zh"
+                    ? "下载需要 10~60 分钟（取决于网络）。完成后请在下方把「嵌入模式」切到 real 并点「重建索引」。"
+                    : "Takes 10–60 min depending on network. Then switch Embedding mode to real and reindex below."}
+                </span>
+              </div>
+            )}
+
+            {ragInstall && ragInstall.status === "error" && (
+              <span className="settings-hint">
+                {lang === "zh" ? "下载失败：" : "Download failed: "}
+                {ragInstall.error}
+              </span>
+            )}
+            {ragInstall && ragInstall.status === "success" && (
+              <span className="settings-hint">
+                {lang === "zh" ? "下载已完成。" : "Download finished. "}
+                {ragInstall.message}
+              </span>
+            )}
+
             <label className="settings-field">
               <span className="settings-label">{lang === "zh" ? "嵌入模式（Embedding）" : "Embedding mode"}</span>
               <select
