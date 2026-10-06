@@ -38,28 +38,42 @@ npm config get registry
 ```
 ✅ 判据：输出 `https://registry.npmmirror.com/`
 
-### cargo 镜像 —— 写成配置文件（比环境变量可靠）
+### cargo 镜像 —— ★ 必须能加速 **crate 下载**，只换索引没用
 
-环境变量只对**当前窗口**有效；构建时你一定会新开窗口，很容易忘。写成配置一劳永逸：
+**实测教训（2026-06-06，本机）**：索引镜像 ≠ 下载镜像。很多教程只让你换 `registry`，
+但索引里的 `config.json` 若仍写着官方 `dl`，**大头（几百 MB 的 .crate 文件）还是走官方源**。
+
+| 源 | `config.json` 里的 `dl` | 9.3MB 样本实测 |
+|---|---|---|
+| `mirrors.ustc.edu.cn/crates.io-index/` | `https://static.crates.io/crates`（**未重写**） | —— |
+| `mirrors.tuna.tsinghua.edu.cn/crates.io-index/` | `https://static.crates.io/crates`（**未重写**） | —— |
+| **`rsproxy.cn/index/`** | **`https://rsproxy.cn/api/v1/crates`**（已重写 ✅） | **3.3 MB/s** |
+| 官方 `static.crates.io`（不配镜像时的实际下载源） | —— | **29 KB/s**（1.1MB 就 40s 超时） |
+
+⇒ **只配 rsproxy 有效**（差约 100 倍）。用清华/ustc 只换索引，下载依旧几小时。
 
 ```powershell
 New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.cargo" | Out-Null
 @"
 [source.crates-io]
-replace-with = 'ustc'
+replace-with = 'rsproxy-sparse'
 
-[source.ustc]
-registry = "sparse+https://mirrors.ustc.edu.cn/crates.io-index/"
+[source.rsproxy-sparse]
+registry = "sparse+https://rsproxy.cn/index/"
+
+[net]
+git-fetch-with-cli = true
 "@ | Set-Content -Path "$env:USERPROFILE\.cargo\config.toml" -Encoding ASCII
 ```
 
 > ⚠️ 必须用 `-Encoding ASCII`：PS 5.1 的 `-Encoding UTF8` 会写入 **BOM**，
-> 而 cargo 的 TOML 解析器遇到 BOM 会报错。本文件内容全是 ASCII，用 ASCII 编码正好无 BOM。
+> 而 cargo 的 TOML 解析器遇到 BOM 会直接报错。本文件内容全是 ASCII，用 ASCII 编码正好无 BOM。
 
 ✅ 判据：
 ```powershell
-Get-Content "$env:USERPROFILE\.cargo\config.toml" | Select-Object -First 2
+Get-Content "$env:USERPROFILE\.cargo\config.toml"
 ```
+配好后**重跑 `cargo check`**（若已在跑，`Ctrl+C` 中断再重跑；已落盘的索引缓存会复用）。
 
 ---
 
