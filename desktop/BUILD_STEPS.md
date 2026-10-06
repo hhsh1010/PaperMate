@@ -175,6 +175,35 @@ Get-ChildItem "C:\Program Files*\Microsoft Visual Studio\2022\*\VC\Tools\MSVC\*\
 
 装完**新开一个 PowerShell 窗口**再跑 `cargo check`。
 
+### ★ 若装好了但 `cargo check` 仍报 `link.exe not found`
+
+极少数情况下 rustc 的工具链探测失效（实例注册信息异常、多版本冲突等）。
+此时**直接进开发者环境**绕过探测 —— `vcvars64.bat` 会把 `LIB` / `INCLUDE` / `PATH`
+都设好，rustc 见到这些变量就直接用，不再需要 vswhere：
+
+```powershell
+cmd /c '"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat" && cargo check'
+```
+
+跑通后确认是"探测失效"而非"没装"：可在**开发者命令提示符**里长期构建，
+或把 `vcvars64.bat` 的内容写进一个 `dev-shell.ps1` 每次构建前调用。
+
+> 本机 2026-10-06 实测：装好 Build Tools 后 `vswhere -requires
+> Microsoft.VisualStudio.Component.VC.Tools.x86.x64` **能正常返回安装路径**，
+> `cargo check` 不再需要这个兜底。
+
+### 排障用：确认"装了但没注册"还是"压根没装"
+
+VS 实例的注册信息保存在：
+```
+C:\ProgramData\Microsoft\VisualStudio\Packages\_Instances\<实例ID>\state.json
+```
+里面有 `installationPath` / `installDate` / `selectedPackages`（含组件 ID）。
+**比 `vswhere` 更可靠** —— 它是安装器的原始记录，能区分"文件在但注册丢了"与"没装"。
+本机实测该文件记录：`installationPath = ...\2022\BuildTools`、
+`installDate = 2026-10-06T13:28:10Z`、含 `Microsoft.VisualStudio.Component.VC.Tools.x86.x64` +
+`Windows11SDK.26100`。
+
 ### 备选方案：切 GNU 工具链（**不推荐**）
 ```powershell
 rustup toolchain install stable-x86_64-pc-windows-gnu
