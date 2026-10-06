@@ -126,33 +126,63 @@ rustc --version
 ```
 ✅ 判据：两条都打印版本号
 
-### ★ 顺带说明：`cargo check` 与 `tauri build` 对工具链的要求不同
+### ★ 关于 `cargo check` 是否需要链接器 —— 更正（2026-06-06 实测踩到）
 
-| 命令 | 需要 VC++ 链接器（`link.exe`）吗 |
-|---|---|
-| `cargo check` | **不需要**（只做语法/类型/借用检查，不产二进制） |
-| `cargo build` / `tauri build` | **需要**，否则报 `linker 'link.exe' not found` |
+**早期说法「`cargo check` 不需要链接器」是错的**，至少对**本项目**不成立。
 
-⇒ 所以你可以**先跑第 6 步的 `cargo check`** 验证 `lib.rs` 改动，把装 VS Build Tools 推迟到正式出包前。
+- 对**纯类型检查**确实不链接…**但 `cargo check` 仍会编译并运行依赖的 `build.rs` 构建脚本，
+  以及把 proc-macro crate 编译成 `.dll`** —— 这两件事都需要链接器。
+- Tauri 的依赖树里全是这类：`proc-macro2` / `quote` / `serde_derive` / `cc` /
+  `phf_generator` / `icu_*` …
+- 实测症状：`error: linker 'link.exe' not found` + 一大批
+  `could not compile xxx (build script) due to 1 previous error`。
 
-### 装 VC++ 工具链（`tauri build` 之前必须完成）
+⇒ **结论：`cargo check` 与 `tauri build` 都需要 MSVC 链接器**，装 VS Build Tools 无法推迟。
 
+### 装 VC++ 工具链（先做这一步，再跑任何 cargo 命令）
+
+**方式 A · winget（推荐，快）**
 ```powershell
-winget install --id Microsoft.VisualStudio.2022.BuildTools --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+winget install --id Microsoft.VisualStudio.2022.BuildTools --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
 ```
+- `--passive`：显示进度但不需交互（`--quiet` 会全程无输出，几 GB 下载期间你会怀疑是不是卡了）
+- `--wait`：等待安装完成才返回
+- 下载约 **2~4GB**，10~30 分钟
 
-没有 `winget` 时改用官方安装器：
+**方式 B · 图形安装器（想看清楚装了什么时用）**
 ```powershell
+cd $env:USERPROFILE\Downloads
 irm https://aka.ms/vs/17/release/vs_BuildTools.exe -OutFile vs_BuildTools.exe
-.\vs_BuildTools.exe --quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended
+Get-Item vs_BuildTools.exe | Select-Object Name, Length   # 应约 1~3MB（只是个引导器）
+.\vs_BuildTools.exe
 ```
-> 体积数 GB，装完可能需要重启。校验：
-> ```powershell
-> & "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe" -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-> ```
-> ✅ 有输出即成功（无输出 ⇒ 还没装上）
+在弹出的界面里勾选 **「使用 C++ 的桌面开发」**（Desktop development with C++），然后安装。
+⚠️ **不要只装 "MSBuild" 或 "C++ CLI"** —— 必须包含 **MSVC 生成工具 + Windows SDK**，
+否则 `link.exe` 仍然找不到。
 
----
+### ✅ 判据（两条都要过）
+```powershell
+# 1) vswhere 能查到含 VC++ x64 工具链的实例
+& "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe" -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+```
+✅ 有路径输出（**无输出 = 没装成功**）
+
+```powershell
+# 2) 真的能找到 link.exe（Rust 通过 vswhere/注册表定位，不依赖 PATH）
+Get-ChildItem "C:\Program Files*\Microsoft Visual Studio\2022\*\VC\Tools\MSVC\*\bin\Hostx64\x64\link.exe" -ErrorAction SilentlyContinue | Select-Object -First 1 FullName
+```
+✅ 打印出 `link.exe` 的完整路径
+
+装完**新开一个 PowerShell 窗口**再跑 `cargo check`。
+
+### 备选方案：切 GNU 工具链（**不推荐**）
+```powershell
+rustup toolchain install stable-x86_64-pc-windows-gnu
+rustup default stable-x86_64-pc-windows-gnu
+```
+GNU 工具链自带 MinGW 的 `ld`，**不需要 VS Build Tools**（只 ~100MB）。
+但 **Tauri 在 Windows 上官方支持的是 MSVC 目标**，GNU 可能出现
+`webview2-com` / NSIS 打包等环节的兼容问题。**仅在实在装不上 Build Tools 时作为兜底。**
 
 ## 第 3 步 · 准备 Portable Python 3.12（embed 版）
 

@@ -32,12 +32,17 @@ $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
 cargo --version
 ```
 
-> **`cargo check` 不需要 VC++ 链接器；`cargo build` / `tauri build` 需要**，
-> 否则报 `linker 'link.exe' not found`。装 MSVC 工具链：
+> ★★ **更正（2026-06-06 实测踩到）：`cargo check` 也需要 MSVC 链接器。**
+> 早期说法「`cargo check` 不做链接所以不需要」是错的 —— 它虽不做代码生成，
+> **但必须编译并运行依赖的 `build.rs`、把 proc-macro crate 编译成 DLL**，二者都要 `link.exe`。
+> Tauri 依赖树里 `proc-macro2` / `quote` / `serde_derive` / `cc` / `icu_*` 全是这类
+> ⇒ 缺链接器的症状是一大批 `could not compile xxx (build script) due to 1 previous error`。
+> **所以必须先装 VC++ 工具链：**
 > ```powershell
-> winget install --id Microsoft.VisualStudio.2022.BuildTools --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+> winget install --id Microsoft.VisualStudio.2022.BuildTools --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
 > ```
-> 详见 `BUILD_STEPS.md` 第 2 步。
+> ⚠️ 安装界面里必须勾选**「使用 C++ 的桌面开发」**（含 MSVC 生成工具 + Windows SDK），
+> 只装 MSBuild 或 C++ CLI 都没用。详见 `BUILD_STEPS.md` 第 2 步。
 
 ### 1.5 ★ 改了 `src/lib.rs` 之后必须先 `cargo check`
 
