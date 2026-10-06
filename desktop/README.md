@@ -15,12 +15,29 @@
 | NSIS | Tauri 打包时**自动下载**，无需预装 | — |
 
 ```powershell
-# Rust 未装时（国内建议先换镜像）
+# ⚠️ 不要用 `irm https://sh.rustup.rs | iex` —— 那个 URL 返回的是 Linux/macOS 的
+#    POSIX sh 脚本，在 PowerShell 里执行会报一堆语法错（"(”后面应为表达式 等）。
+#    Windows 要用 win.rustup.rs（实测返回 9.9MB 的 PE 可执行文件）。
+# 镜像（rustup-init 装工具链时读这两个变量，须同一窗口先设好）
 $env:RUSTUP_DIST_SERVER = "https://mirrors.tuna.tsinghua.edu.cn/rustup"
 $env:RUSTUP_UPDATE_ROOT = "https://mirrors.tuna.tsinghua.edu.cn/rustup/rustup"
-irm https://sh.rustup.rs -useb | iex
+
+cd $env:USERPROFILE\Downloads
+irm https://win.rustup.rs -OutFile rustup-init.exe
+Get-Item rustup-init.exe | Select-Object Name, Length    # 应约 9.9MB；几十 KB 说明又拿到脚本了
+.\rustup-init.exe -y --default-toolchain stable
+
+# 当前窗口立即可用
+$env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
 cargo --version
 ```
+
+> **`cargo check` 不需要 VC++ 链接器；`cargo build` / `tauri build` 需要**，
+> 否则报 `linker 'link.exe' not found`。装 MSVC 工具链：
+> ```powershell
+> winget install --id Microsoft.VisualStudio.2022.BuildTools --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+> ```
+> 详见 `BUILD_STEPS.md` 第 2 步。
 
 ### 1.5 ★ 改了 `src/lib.rs` 之后必须先 `cargo check`
 

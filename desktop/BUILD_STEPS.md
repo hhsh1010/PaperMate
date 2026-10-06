@@ -38,27 +38,105 @@ npm config get registry
 ```
 ✅ 判据：输出 `https://registry.npmmirror.com/`
 
+### cargo 镜像 —— 写成配置文件（比环境变量可靠）
+
+环境变量只对**当前窗口**有效；构建时你一定会新开窗口，很容易忘。写成配置一劳永逸：
+
 ```powershell
-# cargo（仅本次窗口有效；想永久生效请写 %USERPROFILE%\.cargo\config.toml）
-$env:CARGO_REGISTRIES_CRATES_IO_PROTOCOL = "sparse"
-$env:CARGO_REGISTRIES_CRATES_IO_INDEX = "sparse+https://mirrors.ustc.edu.cn/crates.io-index/"
+New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.cargo" | Out-Null
+@"
+[source.crates-io]
+replace-with = 'ustc'
+
+[source.ustc]
+registry = "sparse+https://mirrors.ustc.edu.cn/crates.io-index/"
+"@ | Set-Content -Path "$env:USERPROFILE\.cargo\config.toml" -Encoding ASCII
 ```
-✅ 判据：无报错（`cargo check` 时才会真正验证）
+
+> ⚠️ 必须用 `-Encoding ASCII`：PS 5.1 的 `-Encoding UTF8` 会写入 **BOM**，
+> 而 cargo 的 TOML 解析器遇到 BOM 会报错。本文件内容全是 ASCII，用 ASCII 编码正好无 BOM。
+
+✅ 判据：
+```powershell
+Get-Content "$env:USERPROFILE\.cargo\config.toml" | Select-Object -First 2
+```
 
 ---
 
 ## 第 2 步 · 装 Rust 工具链
 
+### ★★ 不要用 `irm https://sh.rustup.rs | iex`（常见错误）
+
+`sh.rustup.rs` 返回的是 **POSIX sh 脚本**（给 Linux/macOS 的 `curl | sh` 用），
+在 PowerShell 里 `iex` 执行会报一堆 `(”后面应为表达式` / `标记“||”不是有效语句分隔符` —— 因为它根本不是 PS 语法。
+
+实测两个 URL 的返回差异：
+
+| URL | 实际返回 |
+|---|---|
+| `https://sh.rustup.rs` | `#!/bin/sh` 文本脚本 |
+| `https://win.rustup.rs` | **HTTP 200 · `application/x-msdownload` · 9.9MB · 开头 `MZ`**（真正的 PE 可执行文件） |
+
+### 正确做法
+
 ```powershell
+# 1) 镜像（rustup-init 装工具链时会读这两个变量，必须同一窗口先设好）
 $env:RUSTUP_DIST_SERVER = "https://mirrors.tuna.tsinghua.edu.cn/rustup"
 $env:RUSTUP_UPDATE_ROOT = "https://mirrors.tuna.tsinghua.edu.cn/rustup/rustup"
-irm https://sh.rustup.rs -useb | iex
+
+# 2) 下载安装器
+cd $env:USERPROFILE\Downloads
+irm https://win.rustup.rs -OutFile rustup-init.exe
+
+# 3) ★ 先校验下对的是"可执行文件"而不是又一次的脚本
+Get-Item rustup-init.exe | Select-Object Name, Length
 ```
-装完**新开一个窗口**，验证：
+✅ 判据：`Length` 约 **9,900,000+** 字节。
+❌ 若只有几十 KB ⇒ 又是脚本，**不要执行**，改用下方备用地址。
+
 ```powershell
-cargo --version
+# 备用下载地址（win.rustup.rs 若被网络中间件改写）
+irm https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe -OutFile rustup-init.exe
 ```
-✅ 判据：打印 `cargo 1.x.x`
+
+```powershell
+# 4) 静默安装（默认 stable + x86_64-pc-windows-msvc + 完整 profile）
+.\rustup-init.exe -y --default-toolchain stable
+
+# 5) 让**当前**窗口立即可用（不必重开）
+$env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
+
+# 6) 验证
+cargo --version
+rustc --version
+```
+✅ 判据：两条都打印版本号
+
+### ★ 顺带说明：`cargo check` 与 `tauri build` 对工具链的要求不同
+
+| 命令 | 需要 VC++ 链接器（`link.exe`）吗 |
+|---|---|
+| `cargo check` | **不需要**（只做语法/类型/借用检查，不产二进制） |
+| `cargo build` / `tauri build` | **需要**，否则报 `linker 'link.exe' not found` |
+
+⇒ 所以你可以**先跑第 6 步的 `cargo check`** 验证 `lib.rs` 改动，把装 VS Build Tools 推迟到正式出包前。
+
+### 装 VC++ 工具链（`tauri build` 之前必须完成）
+
+```powershell
+winget install --id Microsoft.VisualStudio.2022.BuildTools --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+```
+
+没有 `winget` 时改用官方安装器：
+```powershell
+irm https://aka.ms/vs/17/release/vs_BuildTools.exe -OutFile vs_BuildTools.exe
+.\vs_BuildTools.exe --quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended
+```
+> 体积数 GB，装完可能需要重启。校验：
+> ```powershell
+> & "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe" -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+> ```
+> ✅ 有输出即成功（无输出 ⇒ 还没装上）
 
 ---
 
