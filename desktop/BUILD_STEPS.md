@@ -409,12 +409,57 @@ cd ..
 
 ---
 
-## 第 8 步 · 出包
+## 第 8 步 · 出包（**分两跑，先快后全**）
+
+> ### ★ 重要预期：`cargo check` 之后再 build 仍要重编一遍
+>
+> `cargo check` **只产出元数据、不做代码生成** ⇒ 它留下的缓存对 `cargo build` **不可复用**。
+> 所以第一次 build（哪怕 debug）仍需把所有依赖**真正编译一遍**：
+>
+> | 命令 | 额外耗时（首次） | 产出 |
+> |---|---|---|
+> | `--debug --no-bundle` | 最快（无优化、不打包） | 可运行的 exe（debug） |
+> | `--debug` | 较快 | debug 安装包 |
+> | 默认（release） | **最慢**（开优化 + 需下载 NSIS） | release 安装包（**给用户的那份**） |
+
+### 8A · 先跑「快速验证版」（**推荐第一步**）
 
 ```powershell
+cd <项目根>\desktop
+npm run tauri build -- --debug --no-bundle
+```
+
+- `--debug`：用 debug profile，**不开启优化** ⇒ 编译快得多
+- `--no-bundle`：**跳过安装包制作** ⇒ 不下载 NSIS、不做签名
+- ✅ 判据：`Finished` 且出现 → `target\debug\papermate-desktop.exe`
+- 👉 **直接用这个 exe 走第 9 步的首装验收** —— 功能与 release 版一致，迭代快得多
+
+### 8B · 再出正式安装包（验收通过后再做）
+
+```powershell
+cd <项目根>\desktop
 npm run tauri build
 ```
-耗时较长（首次要编 Rust 依赖 + 下载 NSIS，十几分钟起）。
+
+耗时最长（开优化重编 + 首次下载 NSIS，**十几分钟到半小时**）。
+
+✅ 判据 — 产物两个：
+
+| 路径 | 说明 |
+|---|---|
+| `src-tauri\target\release\bundle\nsis\*.exe` | **安装包**（给最终用户） |
+| `src-tauri\target\release\papermate-desktop.exe` | **免安装绿色版**（双击即跑） |
+
+### ⚠️ 8B 可能踩到的点
+
+| 现象 | 原因 | 处理 |
+|---|---|---|
+| 长时间无输出（>10 分钟） | release 编译 Rust 依赖，属正常 | 别中断，看 `target\release` 体积在涨 |
+| 签名环节报找不到 `scripts/codesign.ps1` | 该路径相对**运行时的 cwd**（应为 `desktop\`）解析 | 确认是在 `desktop\` 下执行的；或临时把 `tauri.conf.json` 的 `signCommand` 整段删掉再打 |
+| 卡在下载 NSIS | 首次打包需从 GitHub 拉 NSIS | 确认能访问 github.com；`--bundles nsis` 已显式指定 |
+| 想跳过一切交互提示 | —— | 加 `--ci` |
+
+---
 
 ✅ 判据 — 产物两个：
 
