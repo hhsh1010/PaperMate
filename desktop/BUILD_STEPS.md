@@ -510,6 +510,7 @@ cd <项目根>\desktop
 | 设置页·运行环境 | 显示「未安装」 | 界面观察 |
 | 设置页·模型 | 两个都「未安装」，按钮为「准备环境并下载（约 8.5GB）」 | 界面观察 |
 | API Key 区 | 两家厂商都「未配置」 | 界面观察 |
+| **`deps-ready` 标记已写** | 存在，且内容形如 `papermate-deps-v1 <16 位十六进制>` | `Get-Content "$env:LOCALAPPDATA\PaperMate\deps-ready"` |
 | 上传 PDF | 正常解析 | 界面操作 |
 
 **★ 验证"重依赖确实没装"（最关键的一条）**：
@@ -547,3 +548,28 @@ Test-Path "$env:LOCALAPPDATA\PaperMate\venv\Lib\site-packages\torch"
 | `resource path not found`（Windows 上找不到 bundled python） | 用 `cargo build`/`tauri dev` 而非 `tauri build` 跑 | 正式出包用 `tauri build`；`resources` 在 target/release 下才完整 |
 | 窗口白屏 | 后端未就绪 | 看 `%LOCALAPPDATA%\PaperMate\data\logs\app.log`；`loading.html` 会自动跳转 |
 | 启用 real 后检索失败 | 依赖或权重未就绪 | 看设置页「运行环境」与模型安装状态；`HF_HOME` 在 `%LOCALAPPDATA%\PaperMate\huggingface` |
+| **`OSError: Readme file does not exist: README.md`** | ★ `pyproject.toml` 声明了 `readme`，但打包脚本**漏拷**进后端副本。首启 `uv sync` 要**安装项目自身**（editable），hatchling 必读该文件 | 重跑第 6 步（脚本已修，会拷 `README.md`/`LICENSE`）。★ 开发机**永远测不出** —— 项目根一直有 README.md，只有**导出副本**才缺 |
+| `uv sync failed: exit code: 2` ＋ `拒绝访问 (os error 5)` | 用户**全局** uv 缓存里有永久损坏条目（ACL/属主异常，`uv cache clean` 也删不掉） | 已改 App 私有 `UV_CACHE_DIR=<local_data>\uv-cache`。应急（**无需重编译**）：`$env:UV_CACHE_DIR="$env:LOCALAPPDATA\PaperMate\uv-cache"` 后跑现有 exe |
+| **窗口永远停在「正在启动」；后端日志 `No module named papermate`** | ★★★ venv 是**半成品**（`python.exe` 在、`site-packages` 空），而旧判据只看 `python.exe` 是否存在 ⇒ **永远跳过安装、且零报错** | 重编译（已修：能力探测 + `deps-ready` 指纹标记）。应急一键重置：删 `%LOCALAPPDATA%\PaperMate\deps-ready` **和** `venv` 目录后重启 |
+| 点过「准备运行环境」后 `torch` 又不见了 | ★★ 首启那段 `uv sync` 重跑了一次，**精确模式把"多余"包剪掉**（只在指纹变化时发生：换 lock / 换安装目录） | 已修：首启带 `--inexact`（绝不删除环境里已有的包）。诊断：`uv sync --dry-run` 若打印 ` - pkg==ver` 就是**会删** |
+
+---
+
+## 附 · 首启「是否需要安装依赖」的判据（2026-10-07 重做）
+
+```
+deps-ready 标记（%LOCALAPPDATA%\PaperMate\deps-ready）内容 == 当前指纹
+  且 venv\Scripts\python.exe 存在
+        └─→ 跳过安装（0ms，不启动任何子进程）
+否则
+        └─→ uv sync --extra rag --frozen --inexact
+              --no-install-package torch/FlagEmbedding/sentence-transformers
+            → 退出码 0 **且** `python -c "import fastapi, sqlalchemy, papermate, lightcore"` 成功
+            → 才写入 deps-ready 标记
+```
+
+- **指纹** = `FNV1a64(uv.lock 字节 ‖ 后端副本绝对路径)` ⇒ **换 lock（升级）** 或 **换安装目录** 都会自动重装。
+- ★ **判据是「能力」不是「文件是否存在」** —— `uv` 在**创建环境**阶段就写好 `python.exe`，安装在其后；只看文件存在 ⇒ 首次失败后会**永久跳过安装**（详见故障速查第 3 条）。
+- ★ **强制重装**：只删 `%LOCALAPPDATA%\PaperMate\deps-ready` 即可（**venv 不必删**，uv 会自己补全）。
+- ★ 探针**只 import 轻量包**，绝不 import `papermate.api` —— 后者在导入期就 `create_app()`，有建库/建目录副作用。
+- ★ 为什么不做"每次启动都探测"：**实测**探针要 1670ms（裸解释器启动就 827ms）⇒ 每次白等 ~0.85s，不可接受。
