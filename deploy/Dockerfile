@@ -47,6 +47,10 @@ COPY src/ ./src/
 COPY web/dist/ ./web/dist/
 RUN uv sync --frozen --no-dev --extra rag
 
+# ---- 非 root 运行（降低容器被攻破时的危害面）----
+RUN useradd -m -u 1000 app && mkdir -p /data && chown -R app /data /app
+USER app
+
 EXPOSE 8000
 VOLUME ["/data"]
 

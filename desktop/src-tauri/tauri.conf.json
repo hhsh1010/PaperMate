@@ -1,0 +1,61 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "PaperMate",
+  "version": "0.1.0",
+  "identifier": "com.papermate.desktop",
+  "build": {
+    "beforeDevCommand": "echo noop",
+    "devUrl": "http://127.0.0.1:8000",
+    "beforeBuildCommand": "echo noop",
+    "frontendDist": "../frontend-dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "PaperMate",
+        "url": "http://127.0.0.1:8000/loading.html",
+        "width": 1280,
+        "height": 860,
+        "resizable": true,
+        "minWidth": 960,
+        "minHeight": 640
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "resources": {
+      "resources/python": "resources/python",
+      "resources/backend": "resources/backend"
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "webviewInstallMode": { "mode": "downloadBootstrapper" },
+      "nsis": {
+        "displayLanguageSelector": true
+      },
+      "signCommand": "pwsh scripts/codesign.ps1 -FileToSign \"%1\""
+    }
+  },
+  "plugins": {
+    "shell": {
+      "open": true
+    },
+    "updater": {
+      "endpoints": [
+        "https://releases.papermate.app/{{target}}/{{arch}}/{{current_version}}"
+      ],
+      "pubkey": "REPLACE_WITH_ED25519_PUBLIC_KEY_FROM_gen_update_keys"
+    }
+  }
+}

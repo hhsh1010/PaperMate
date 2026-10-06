@@ -5,6 +5,10 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+# L0 首装仿真/门禁排查用的临时 basetemp（2026-10-06）：pytest 显式指定它可跳过
+# 自身对 %TEMP%\pytest-of-* 的垃圾回收，从而绕开沙箱批量删除保护。
+.l0_bt/
+.l0_tmp/
 .ruff_cache/
 .mypy_cache/
 .tox/
@@ -81,3 +85,29 @@ eval/*.txt
 
 # ---- docx 原子写残留的空临时目录（实测 29 个）----
 docs/tmp*/
+
+# ---- Tauri 桌面客户端（构建产物 / 捆绑资源，体积大，不入库）----
+desktop/src-tauri/target/
+desktop/src-tauri/resources/
+desktop/src-tauri/gen/
+desktop/keys/
+
+# ---- GitHub 上传加固（2026-10-05 补充；仅新增忽略项，不影响任何已跟踪文件）----
+# 编辑器 / OS 垃圾
+*.swp
+*.swo
+# Python 打包产物（若将来 `uv build`）
+*.egg-info/
+build/
+dist/
+# 前端缓存与增量类型检查
+web/.vite/
+web/.eslintcache
+*.tsbuildinfo
+# 覆盖率 / 类型 stub
+.coverage
+htmlcov/
+.nyc_output/
+coverage/
+# 全局日志兜底（data/ 已整体忽略，这里覆盖其它位置的 *.log）
+*.log
