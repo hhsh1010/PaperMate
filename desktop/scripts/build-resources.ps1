@@ -14,8 +14,10 @@ if (Test-Path $backend) { Remove-Item $backend -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $backend | Out-Null
 
 # 2) 拷贝后端源码（排除重型/私密目录）
-robocopy "$root/src"          "$backend/src"          /E /NFL /NDL /NJH
-robocopy "$root/web"          "$backend/web"          /E /NFL /NDL /NJH /XD node_modules
+#    ⚠️ /XD tmp* 是刻意加的：开发过程会留下空的 tmp* 目录（git 不跟踪空目录，
+#    所以 `git status` 看不见它），而 robocopy /E **会**把空目录一起拷进安装包。
+robocopy "$root/src"          "$backend/src"          /E /NFL /NDL /NJH /XD tmp*
+robocopy "$root/web"          "$backend/web"          /E /NFL /NDL /NJH /XD node_modules tmp*
 Copy-Item "$root/pyproject.toml" "$backend/"
 Copy-Item "$root/uv.lock"        "$backend/"
 Copy-Item "$root/.env.example"   "$backend/"
@@ -27,7 +29,7 @@ if (-not (Test-Path "$backend/web/dist/index.html")) {
     npm ci
     npm run build
     Pop-Location
-    robocopy "$root/web" "$backend/web" /E /NFL /NDL /NJH /XD node_modules
+    robocopy "$root/web" "$backend/web" /E /NFL /NDL /NJH /XD node_modules tmp*
 }
 
 # 4) 注入启动等待页（由后端托管，同源轮询 /healthz 后跳转 /）
