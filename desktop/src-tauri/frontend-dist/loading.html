@@ -14,7 +14,7 @@
         background: #0f1115;
         color: #cdd3df;
       }
-      .box { text-align: center; }
+      .box { text-align: center; max-width: 460px; padding: 0 24px; }
       .spin {
         width: 28px; height: 28px;
         border: 3px solid #2a2f3a;
@@ -25,31 +25,73 @@
       }
       @keyframes r { to { transform: rotate(360deg); } }
       #msg { font-size: 13px; color: #8b93a3; }
+      #hint {
+        font-size: 12px; color: #6b7383; margin-top: 10px;
+        line-height: 1.7; text-align: left; white-space: pre-wrap;
+      }
+      #hint:empty { display: none; }
     </style>
   </head>
   <body>
     <div class="box">
       <div class="spin"></div>
       <div id="msg">正在启动本地服务…</div>
+      <div id="hint"></div>
     </div>
     <script>
-      // 同源轮询后端健康检查；就绪后跳转到真实 UI（/）。
-      // 后端由 Rust sidecar 拉起，可能比本页面晚几百毫秒，故失败重试即可。
-      const BASE = "http://127.0.0.1:8000";
-      function tick() {
-        fetch(BASE + "/api/v1/healthz")
-          .then(function (r) {
-            if (r.ok) {
-              location.href = BASE + "/";
-            } else {
-              setTimeout(tick, 1000);
-            }
+      // ─────────────────────────────────────────────────────────────────────
+      // 本页由**包内本地资源**加载（tauri.conf.json: windows[0].url = "loading.html"）。
+      //
+      // ★★ 2026-10-07 修复：此前 url 指向 `http://127.0.0.1:8000/loading.html`，
+      //    即"等待页本身要靠它所等待的后端才能显示"；而 Tauri 的顺序是
+      //    「先按配置建窗口 → 再跑 setup 里的起后端」⇒ 窗口第一帧必然早于后端。
+      //    后端没起来时窗口就停在 WebView2 的连接错误页、且**不会自愈**
+      //    （真机首装要装几十分钟，必然撞上）。现在本地加载，后端没起也能显示本页。
+      //
+      // 就绪后由 **Rust 侧**把窗口导航到真实 UI（它才确切知道后端起没起）——
+      // 见 lib.rs::navigate_when_backend_ready。下面这道探测只是**兜底**
+      // （万一 Rust 的 eval 没生效）。两者都指向同一个 URL，不会冲突。
+      //
+      // ★ 兜底探测必须用 { mode: "no-cors" }：
+      //   本页 origin 是 tauri.localhost，与 127.0.0.1:8000 **跨源**，
+      //   而后端**没有 CORS 中间件** ⇒ 普通 fetch 会被 CORS 拦：
+      //   即使后端已就绪也永远拿不到 r.ok，会无限重试。
+      //   no-cors 是"简单请求"、不需要 CORS 头：
+      //     · 服务器有响应 ⇒ promise resolve（opaque 响应，读不到状态码）
+      //     · 连接被拒/不可达 ⇒ promise reject
+      //   ⇒ 正好可用作"端口通了没"的可达性探测。
+      //   （代价：读不到 HTTP 状态码。后端真出业务错误时由 SPA 自己提示，对首屏等待足够。）
+      // ─────────────────────────────────────────────────────────────────────
+      (function () {
+        var BASE = "http://127.0.0.1:8000";
+        var T0 = Date.now();
+        var hintShown = false;
+
+        function el(id) { return document.getElementById(id); }
+
+        function tick() {
+          var sec = Math.round((Date.now() - T0) / 1000);
+          el("msg").textContent = "正在启动本地服务… 已等待 " + sec + " 秒";
+
+          // 超过 8 秒还没就绪，多半是**首次启动正在装运行环境**（下载 + 安装依赖）。
+          // 这一步以前完全没有反馈，用户会以为卡死 —— 明确告知并劝阻关窗。
+          if (!hintShown && sec >= 8) {
+            hintShown = true;
+            el("hint").textContent =
+              "首次启动需要安装本地运行环境，视网速可能持续数分钟。\n" +
+              "期间请不要关闭本窗口 —— 安装会被中断。";
+          }
+
+          fetch(BASE + "/api/v1/healthz?t=" + Date.now(), {
+            mode: "no-cors",
+            cache: "no-store"
           })
-          .catch(function () {
-            setTimeout(tick, 1000);
-          });
-      }
-      tick();
+            .then(function () { location.href = BASE + "/"; })
+            .catch(function () { setTimeout(tick, 1000); });
+        }
+
+        tick();
+      })();
     </script>
   </body>
 </html>

@@ -11,6 +11,12 @@ const HOST: &str = "127.0.0.1";
 const PORT: u16 = 8000;
 const APP_DATA: &str = "PaperMate";
 
+/// 等后端**真正开始监听**的最长时间。
+///
+/// ★ 只在"依赖已装好、后端进程已 spawn"之后才计时，所以不需要迁就首次安装的几十分钟；
+///   这个超时针对的是"进程起了但端口一直不通"的异常情况。
+const READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
+
 /// 首启**不安装**的重依赖（**发行包名**，uv 的 `--no-install-package` 按发行名匹配）。
 ///
 /// ★ 唯一真源在 Python 侧 `papermate/services/rag_deps.py::HEAVY_DISTRIBUTIONS`；
@@ -131,6 +137,60 @@ pub fn run() {
     });
 }
 
+/// 把窗口里的等待页切到**失败态**，把原因直接显示给用户。
+///
+/// ★ 为什么必须做（2026-10-07）：首启失败时（`uv sync` 报错、探针不过、进程起不来），
+///   错误此前只打在 stdout/stderr —— 而用户多半是**双击 exe 启动、根本没有控制台**，
+///   于是只能看到一个永远转圈的窗口，完全不知道发生了什么，只能反复重启。
+fn show_startup_error(app: &tauri::AppHandle, msg: &str) {
+    let Some(win) = app.get_webview_window("main") else {
+        eprintln!("[desktop] no window to show error in: {}", msg);
+        return;
+    };
+    // ★ 用 serde_json 生成**合法的 JS 字符串字面量**（自动转义引号/反斜杠/换行）。
+    //   直接把错误文本拼进 JS 里，一旦文本含引号就会造成语法错误 —— 那时连错误都看不到。
+    let lit = serde_json::to_string(msg).unwrap_or_else(|_| "\"(启动失败)\"".to_string());
+    let js = format!(
+        "(function(){{var h=document.getElementById('hint');\
+if(h){{h.style.color='#ff8f8f';h.textContent={lit};}}\
+else{{document.body.innerHTML='<pre style=\"color:#ff8f8f;padding:24px;white-space:pre-wrap\">'+{lit}+'</pre>';}}}})();"
+    );
+    if let Err(e) = win.eval(js) {
+        eprintln!("[desktop] could not show error in window: {}", e);
+    }
+}
+
+/// 轮询等后端开始监听，然后把窗口从**本地等待页**导航到真实 UI。
+///
+/// ★★ 为什么"就绪判定"由 Rust 做，而不是让等待页自己 `fetch`（2026-10-07）：
+///   窗口的 origin 是 `tauri.localhost`，与 `127.0.0.1:8000` **跨源**，而后端**没有 CORS 中间件**
+///   ⇒ 页面里的普通 `fetch` 会被 CORS 拦：即使后端已就绪也永远拿不到结果，会无限重试。
+///   改成 `mode:"no-cors"` 大概率可行，但那纯粹取决于**浏览器跨源策略**，
+///   **无法在无 GUI 环境验证**；一旦被拦，症状是"永远转圈"，比现状更糟。
+///   ⇒ 就绪信号改由**知道真相的一侧**（本进程）给出：后端是我们自己 spawn 的，端口通了就是通了。
+///   页面的 `no-cors` 探测仅作**兜底**（万一 `eval` 没生效），两者不冲突。
+fn navigate_when_backend_ready(app: tauri::AppHandle, port: u16) {
+    let addr = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port));
+    let deadline = std::time::Instant::now() + READY_TIMEOUT;
+    loop {
+        if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(400)).is_ok()
+        {
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.eval(format!("location.href = 'http://127.0.0.1:{port}/';"));
+            }
+            return;
+        }
+        if std::time::Instant::now() >= deadline {
+            show_startup_error(
+                &app,
+                "本地服务启动超时（3 分钟内未就绪）。\n请检查控制台输出与日志，或重启应用。",
+            );
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }
+}
+
 fn bootstrap_and_spawn(app: &tauri::AppHandle) {
     // ⚠️ Tauri 2.12 起 `resource_dir()` / `local_data_dir()` 返回 **Result<PathBuf, Error>**
     //    而不是早期的 `Option<PathBuf>`（源码 path/desktop.rs:230 / :86）。
@@ -175,6 +235,7 @@ fn bootstrap_and_spawn(app: &tauri::AppHandle) {
 
     if let Err(e) = fs::create_dir_all(&data_dir) {
         eprintln!("[desktop] cannot create data_dir {:?}: {}", data_dir, e);
+        show_startup_error(app, &format!("无法创建数据目录：{}\n{}", data_dir.display(), e));
         return;
     }
 
@@ -278,10 +339,21 @@ fn bootstrap_and_spawn(app: &tauri::AppHandle) {
                 eprintln!(
                     "[desktop] (uv's own output above has the cause; the app will retry on next launch)"
                 );
+                show_startup_error(
+                    app,
+                    &format!(
+                        "依赖安装失败（uv sync 退出码 {:?}）。\n\n\
+                         下次启动会自动重试，无需手动清理。\n\
+                         若反复失败，请把控制台输出或 {} 一并反馈。",
+                        s.code(),
+                        data_dir.join("logs").display()
+                    ),
+                );
                 return;
             }
             Err(e) => {
                 eprintln!("[desktop] cannot run uv.exe: {}", e);
+                show_startup_error(app, &format!("无法运行捆绑的 uv.exe：{e}"));
                 return;
             }
         }
@@ -292,6 +364,13 @@ fn bootstrap_and_spawn(app: &tauri::AppHandle) {
         if !probe_backend_imports(&venv_python, &backend_dir) {
             eprintln!(
                 "[desktop] uv sync reported success but backend imports still fail; NOT writing the deps marker so the next launch will retry."
+            );
+            show_startup_error(
+                app,
+                "本地运行环境安装不完整（依赖装上了但后端仍无法导入）。\n\n\
+                 下次启动会自动重试。\n\
+                 若反复失败，可删除下面的目录后重启应用：\n\
+                 %LOCALAPPDATA%\\PaperMate\\venv",
             );
             return;
         }
@@ -306,6 +385,11 @@ fn bootstrap_and_spawn(app: &tauri::AppHandle) {
     }
 
     // 启动后端 sidecar：一个进程同时托管 /api/v1/* 与 / (SPA, web/dist)
+    //
+    // ★ 顺序上有个关键点（2026-10-07 从 tauri 源码确认）：**窗口早在本函数之前就已按
+    //   `tauri.conf.json` 的 `windows[0].url` 创建好了**（`app.rs::setup` 里先建窗口、
+    //   再跑用户的 setup 闭包）。所以窗口此刻显示的是**包内的本地等待页**（`loading.html`），
+    //   需要我们在后端就绪后**主动把它导航**到真实 UI —— 见 `navigate_when_backend_ready`。
     match Command::new(&venv_python)
         .current_dir(&backend_dir)
         .args(["-m", "papermate.api"])
@@ -318,9 +402,12 @@ fn bootstrap_and_spawn(app: &tauri::AppHandle) {
     {
         Ok(child) => {
             *BACKEND.lock().unwrap() = Some(child);
+            let handle = app.clone();
+            std::thread::spawn(move || navigate_when_backend_ready(handle, PORT));
         }
         Err(e) => {
             eprintln!("[desktop] failed to spawn backend: {}", e);
+            show_startup_error(app, &format!("后端进程启动失败：{e}"));
         }
     }
 }
