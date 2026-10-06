@@ -4,10 +4,26 @@
 # 注意：resources/ 体积大（后端源码 + Portable Python），已加入 .gitignore，不入库。
 
 $ErrorActionPreference = "Stop"
-$root = Resolve-Path "$PSScriptRoot/.."          # 仓库根
+# ⚠️ 2026-10-06 修复：本脚本位于 `<仓库根>/desktop/scripts/`，所以仓库根是 **../..**。
+#    此前误写成 `..`（= desktop/），导致后续 robocopy "$root/src"、Copy-Item "$root/pyproject.toml"
+#    全部错一层 ⇒ 首次真正执行时以 "系统找不到指定的文件" 失败。
+#    ★ 教训：脚本因为"没有执行条件"（沙箱无 npm/Rust）而从未跑过 ⇒ 路径推导错误不会在静态检查里暴露。
+$root = Resolve-Path "$PSScriptRoot/../.."        # 仓库根
 $tauri = "$root/desktop/src-tauri"
 $backend = "$tauri/resources/backend"
 $pyDir = "$tauri/resources/python"
+
+# 前置自检：路径推导错误要在第一步就明确报出，而不是让 robocopy 报一堆"找不到文件"
+foreach ($must in @("$root/pyproject.toml", "$root/src", "$root/web")) {
+    if (-not (Test-Path $must)) {
+        Write-Error @"
+路径自检失败：未找到 $must
+  推断出的仓库根 = $root
+  脚本位置        = $PSScriptRoot
+  ★ 若上面两行只差一级目录，说明本脚本的相对层级推导被改错了（本脚本应固定为 ../..）。
+"@
+    }
+}
 
 # 1) 清理旧的 backend 副本
 if (Test-Path $backend) { Remove-Item $backend -Recurse -Force }

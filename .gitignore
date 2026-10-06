@@ -41,7 +41,13 @@ web/dist.old/
 .workbuddy/
 
 # ---- 重模型权重（BGE-M3 等，体积大）----
-models/
+# ⚠️ 必须锚定成 `/models/`，不能写裸 `models/`（2026-10-06 修复）：
+#    裸模式（无前导斜杠）匹配**任意层级**的 models 目录 ⇒ 实测把源码包
+#    `src/papermate/models/`（db.py + migrations.py，约 27KB）**静默排除出整个 git 历史**
+#    ⇒ 克隆/导出的代码启动即 `ModuleNotFoundError: No module named 'papermate.models'`。
+#    判据：写 .gitignore 排除"某类产物"时，若该名字**恰好也是源码包名**（models/weights/assets/
+#    lib/util/config），一律加前导 `/` 锚定到仓库根。
+/models/
 .cache/huggingface/
 
 # ---- 运行产物 ----
