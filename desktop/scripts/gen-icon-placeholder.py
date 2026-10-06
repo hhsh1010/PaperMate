@@ -1,23 +1,25 @@
-"""生成占位应用图标源图（1024x1024 PNG）—— 供 `npx tauri icon` 生成全套图标。
+"""生成占位应用图标：源图（1024x1024）+ Tauri 打包所需的**全套图标文件**。
 
 为什么需要它
 ------------
-`npx tauri icon <logo.png>` 是官方做法（Tauri 自己的 CLI 会正确产出 32x32.png /
-128x128.png / 128x128@2x.png / icon.ico / icon.icns 全套格式）。
-但它**必须有一张 ≥1024x1024 的方形源图**，而本项目目前只有 `web/public/hero-illustration.png`
-（1184x760 的**横幅插画**，直接当图标会很难看）。
+`tauri.conf.json` 的 `bundle.icon` 列了 5 个文件，**缺任何一个 `tauri-build` 都会失败**：
 
-所以这里生成一张**几何风格**的占位图（不依赖任何字体文件，避免踩"字体不存在"的老坑）：
-- 圆角方形底 + 斜向渐变（品牌感）
-- 白色"文档 + 文本行"图形，暗示"论文阅读"
-- 右上角一条青色高亮条，点题"AI"
+    32x32.png   128x128.png   128x128@2x.png   icon.ico   icon.icns
 
-★ 正式发布前请用真实 logo 替换：把 `--out` 指到你的 logo，或直接覆盖本文件后重跑
-  `npx tauri icon desktop/src-tauri/icons/logo-source.png`。
+而 `cargo check` **阶段**就会校验（要生成 Windows Resource），不是等到打包
+⇒ 报错形如：
+    `...icons/icon.ico` not found; required for generating a Windows Resource file
+
+官方做法是 `npx tauri icon <源图>`（Tauri 自己的 CLI，最可靠），但它需要先
+`npm install` 装 @tauri-apps/cli。**本脚本用 Pillow 直接产出同一套文件**，
+让"没有 npm 也能先把 cargo 跑通"这条路成立（实测 Pillow 可写多尺寸 ICO 与 ICNS）。
+
+★ 正式发布前请用真实 logo 覆盖源图，并**优先**用官方 CLI 重新生成：
+    cd desktop ; npm install ; npx tauri icon src-tauri/icons/logo-source.png
 
 用法（项目根执行）：
     .venv/Scripts/python.exe desktop/scripts/gen-icon-placeholder.py
-    .venv/Scripts/python.exe desktop/scripts/gen-icon-placeholder.py --out desktop/src-tauri/icons/logo-source.png --text "PM"
+    .venv/Scripts/python.exe desktop/scripts/gen-icon-placeholder.py --source-only   # 只要源图
 """
 
 from __future__ import annotations
@@ -28,6 +30,20 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 SIZE = 1024
+
+#: Tauri 要求的文件名 → 目标边长（与 tauri.conf.json 的 bundle.icon 一一对应）
+ICON_SET: dict[str, int] = {
+    "32x32.png": 32,
+    "128x128.png": 128,
+    "128x128@2x.png": 256,
+}
+
+#: Windows .ico 内含的尺寸档位。★ 16/32/48 用于资源管理器与任务栏，256 用于大图标视图；
+#: 少档位会让某些场景显示成模糊的放大图。
+ICO_SIZES = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
+
+#: macOS .icns 的常见基准尺寸
+ICNS_SIZES = [16, 32, 64, 128, 256, 512, 1024]
 
 
 def _rounded_mask(size: int, radius_ratio: float = 0.22) -> Image.Image:
@@ -105,22 +121,61 @@ def build(text_blocks: int = 4) -> Image.Image:
     return base
 
 
+def emit_icon_set(src: Path, out_dir: Path) -> list[Path]:
+    """从源图产出 Tauri 要求的全套图标，返回写出的文件列表。"""
+    im = Image.open(src).convert("RGBA")
+    written: list[Path] = []
+
+    for name, size in ICON_SET.items():
+        p = out_dir / name
+        im.resize((size, size), Image.LANCZOS).save(p, format="PNG")
+        written.append(p)
+
+    # Windows .ico：多尺寸打包在**一个**文件里
+    ico = out_dir / "icon.ico"
+    im.save(ico, format="ICO", sizes=ICO_SIZES)
+    written.append(ico)
+
+    # macOS .icns：Pillow 支持直接写出（实测可用）；失败不致命 ——
+    # Windows 构建的失败点是 icon.ico，icns 只在 macOS 打包时用得到。
+    icns = out_dir / "icon.icns"
+    try:
+        im.resize((1024, 1024), Image.LANCZOS).save(icns, format="ICNS")
+        written.append(icns)
+    except Exception as e:  # noqa: BLE001
+        print(f"[gen-icon] ⚠️ .icns 生成失败（Windows 构建不受影响）：{type(e).__name__}: {e}")
+
+    return written
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser(description="生成占位应用图标源图（1024x1024 PNG）")
+    ap = argparse.ArgumentParser(description="生成占位应用图标（源图 + Tauri 全套）")
     ap.add_argument(
         "--out",
         default="desktop/src-tauri/icons/logo-source.png",
-        help="输出路径（默认 desktop/src-tauri/icons/logo-source.png）",
+        help="源图输出路径（默认 desktop/src-tauri/icons/logo-source.png）",
+    )
+    ap.add_argument(
+        "--source-only",
+        action="store_true",
+        help="只生成 1024x1024 源图，不产出 Tauri 图标集（留给 `npx tauri icon` 生成）",
     )
     args = ap.parse_args()
 
-    out = Path(args.out)
-    out.parent.mkdir(parents=True, exist_ok=True)
+    src = Path(args.out)
+    src.parent.mkdir(parents=True, exist_ok=True)
     img = build()
-    img.save(out, format="PNG")
-    print(f"[gen-icon] 已写入 {out}（{img.size[0]}x{img.size[1]}）")
-    print("[gen-icon] 下一步：cd desktop && npm install && npx tauri icon \"../%s\"" % out.as_posix())
-    print("[gen-icon] 正式发布前请用真实 logo 覆盖该源图后重跑。")
+    img.save(src, format="PNG")
+    print(f"[gen-icon] 源图已写入 {src}（{img.size[0]}x{img.size[1]}）")
+
+    if args.source_only:
+        print(f'[gen-icon] 下一步：cd desktop && npm install && npx tauri icon "../{src.as_posix()}"')
+        return 0
+
+    for p in emit_icon_set(src, src.parent):
+        print(f"[gen-icon] 已写入 {p}（{p.stat().st_size} 字节）")
+    print("[gen-icon] ✅ Tauri 所需的 5 个图标文件已就位，`cargo check` 可继续")
+    print("[gen-icon] ⚠️ 正式发布前：用真实 logo 覆盖源图后，优先用 `npx tauri icon` 重新生成")
     return 0
 
 

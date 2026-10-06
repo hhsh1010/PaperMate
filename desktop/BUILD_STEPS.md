@@ -213,6 +213,23 @@ GNU 工具链自带 MinGW 的 `ld`，**不需要 VS Build Tools**（只 ~100MB�
 但 **Tauri 在 Windows 上官方支持的是 MSVC 目标**，GNU 可能出现
 `webview2-com` / NSIS 打包等环节的兼容问题。**仅在实在装不上 Build Tools 时作为兜底。**
 
+## ★ `cargo check` / `tauri build` 的前置清单（缺一不可）
+
+Tauri 的 build script 在 **`cargo check` 阶段**就会校验下面两类资源，
+**不是**等到打包时才检查 —— 少任何一个都会直接失败：
+
+| 前置 | 产出物 | 缺失时的报错 |
+|---|---|---|
+| 第 3 步 | `resources/python/`（**目录**存在即可） | `resource path 'resources\python' doesn't exist` |
+| 第 4 步 | `resources/python/uv.exe` | （打包后运行时才失败） |
+| 第 5 步 | `icons/` 下 **5 个图标文件** | `` `...icons/icon.ico` not found; required for generating a Windows Resource file `` |
+| 第 6 步 | `resources/backend/`（含 `web/dist`） | `resource path 'resources\backend' doesn't exist` |
+
+> ★ 2026-10-06 实测：连续踩了后两条 —— 都是"以为只有打包才需要、其实 cargo 阶段就查"。
+> **判据**：`cargo check` 报"某某不存在"时，先怀疑**前置产物没生成**，而不是怀疑配置写错。
+
+---
+
 ## 第 3 步 · 准备 Portable Python 3.12（embed 版）
 
 **为什么必须**：安装包要自带 Python 解释器 —— 目标用户机器上可能根本没装 Python，或版本不对。
@@ -272,16 +289,37 @@ npm install
 ```
 ✅ 判据：出现 `added N packages`，无 ERR
 
+**★ 两种方式任选其一：**
+
+**方式 A · 仓库自带脚本（Pillow，无需 npm）—— 最快，能立刻解掉 cargo 的图标报错**
 ```powershell
+cd <项目根>
+.venv\Scripts\python.exe desktop\scripts\gen-icon-placeholder.py
+```
+一次产出源图 + **全部 5 个文件**（实测 Pillow 可写多尺寸 ICO 与 ICNS）。
+生成的 `icon.ico` 内含 7 个尺寸档位（16/24/32/48/64/128/256），覆盖任务栏与资源管理器各视图。
+
+**方式 B · 官方 CLI（有真实 logo 时推荐）**
+```powershell
+cd <项目根>\desktop
+npm install
 npx tauri icon src-tauri/icons/logo-source.png
 ```
-✅ 判据：`src-tauri\icons\` 下出现这 5 个文件（与 `tauri.conf.json` 的 `bundle.icon` 一一对应）：
+Tauri 自己的 CLI 产出的 `.ico`/`.icns` 质量最好。
+
+### ✅ 判据（5 个文件缺一不可）
+
+```powershell
+Get-ChildItem src-tauri\icons\*.png, src-tauri\icons\*.ico, src-tauri\icons\*.icns | Select-Object Name, Length
+```
+必须看到这 5 个（与 `tauri.conf.json` 的 `bundle.icon` 一一对应）：
 ```
 32x32.png   128x128.png   128x128@2x.png   icon.ico   icon.icns
 ```
 
-> 缺任何一个 ⇒ `tauri build` 会失败。`logo-source.png` 是脚本生成的占位图，
-> 正式 logo 到位后覆盖它再重跑本步即可。
+> ⚠️ **缺任何一个，`cargo check` 阶段就会失败**（不是等到打包）——
+> `` `...icons/icon.ico` not found; required for generating a Windows Resource file ``
+> `logo-source.png` 是占位图，正式发布前用真实 logo 覆盖后重跑（优先方式 B）。
 
 ---
 
