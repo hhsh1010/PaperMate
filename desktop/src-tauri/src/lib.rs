@@ -19,6 +19,80 @@ const APP_DATA: &str = "PaperMate";
 /// ★ 注意 `sentence-transformers` 是**连字符**（发行名）；其 Python 导入名是下划线形式。
 const HEAVY_DEPS: [&str; 3] = ["torch", "FlagEmbedding", "sentence-transformers"];
 
+/// 「依赖已装好」标记文件（与 `venv` / `uv-cache` 并列在 App 数据目录下）。
+///
+/// 内容 = `deps_fingerprint()` 的结果。**只在「uv sync 退出码 0 且能力探测通过」后才写入**
+/// ⇒ 标记为真**蕴含**环境可用（这是后面快速通道敢信任它的唯一理由）。
+const DEPS_SENTINEL: &str = "deps-ready";
+
+/// FNV-1a 64 位哈希（纯 std，无需引入 sha2 等 crate）。
+///
+/// 仅用于本机"变没变"的判定，**不是安全用途**；碰撞概率对本用途可忽略。
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in bytes {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
+/// 当前"应当装出来的环境"的指纹。
+///
+/// 组成 = `uv.lock` 内容 + **后端副本所在绝对路径**，任一变化都意味着 venv 需要重装：
+///   - `uv.lock` 变 ⇒ 依赖集合变了（App 升级到新版本）；
+///   - 路径变       ⇒ editable 安装写进 venv 的 `.pth` **指向旧目录**
+///                    ⇒ `import papermate` 直接失败（装了新版本却白屏）。
+///
+/// ★ 版本标签 `v1` 参与比较：将来若要改指纹口径（比如加入 Python 版本），
+///   把标签升到 `v2` 即可让所有旧标记**自动失效**，无需额外迁移逻辑。
+fn deps_fingerprint(backend_dir: &std::path::Path) -> String {
+    let lock = fs::read(backend_dir.join("uv.lock")).unwrap_or_default();
+    let path = backend_dir.to_string_lossy().to_lowercase();
+    let mut buf = Vec::with_capacity(8 + path.len());
+    buf.extend_from_slice(&fnv1a64(&lock).to_le_bytes());
+    buf.extend_from_slice(path.as_bytes());
+    format!("papermate-deps-v1 {:016x}", fnv1a64(&buf))
+}
+
+/// 能力探测：这个 venv **真的**跑得起来后端吗？
+///
+/// ★★ 2026-10-06 P0（本次真机首装暴露）：判据**绝不能**是"`venv/Scripts/python.exe`
+///   是否存在"。`uv` 在**创建环境**阶段就把 `python.exe` 写好了，而**安装包在其后**；
+///   首启一旦中途失败（当时是 pyproject 声明的 `README.md` 没被拷进后端副本，
+///   `hatchling` 构建本地项目失败），venv 里就只剩一个 `site-packages/_virtualenv.pth`
+///   的**空壳**，而 `python.exe` 是在的。于是旧判据 `!venv_python.exists()` 被满足
+///   ⇒ **以后每次启动都跳过安装**，直接拿空环境跑 `-m papermate.api`
+///   ⇒ `No module named papermate` ⇒ 后端永不启动、界面永久停在"正在启动"，
+///   而且**一句错误提示都没有**（用户只会反复重启，越重启越确信"装坏了"）。
+///   ⇒ 判据必须是**能力**，不是文件存在性（同源教条："能力存在"≠"能力启用"）。
+///
+/// ★ 只 import **轻量标记包**，**绝不** import `papermate.api` ——
+///   后者在导入期就执行 `create_app()`，会带来建库/建目录等副作用，不适合当探针。
+///   实测两个包的 `__init__.py` 都是空文件 ⇒ 零副作用。
+fn probe_backend_imports(venv_python: &std::path::Path, cwd: &std::path::Path) -> bool {
+    let out = Command::new(venv_python)
+        .current_dir(cwd)
+        .args(["-c", "import fastapi, sqlalchemy, papermate, lightcore"])
+        .output();
+    match out {
+        Ok(o) if o.status.success() => true,
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            eprintln!(
+                "[desktop] venv capability probe FAILED (rc={:?}): {}",
+                o.status.code(),
+                stderr.trim().lines().last().unwrap_or("").trim()
+            );
+            false
+        }
+        Err(e) => {
+            eprintln!("[desktop] venv capability probe could not run: {}", e);
+            false
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // ★ Tauri 2 的 API 形状（已按 tauri-2.12.1 源码逐一核对，不是照记忆写的）：
@@ -143,7 +217,19 @@ fn bootstrap_and_spawn(app: &tauri::AppHandle) {
     // ★ HEAVY_DEPS 必须与 Python 侧 `rag_deps.HEAVY_DISTRIBUTIONS` **逐字一致** ——
     //   不一致会导致"首启排除了但启用时没补装"（或反之），且极难察觉。
     //   `tests/test_desktop_heavy_deps_contract.py` 会静态校验这一致性。
-    if !venv_python.exists() {
+    // ★★ 2026-10-06 P0：**"是否需要安装"的判据** = 「venv 解释器在」∧「deps-ready 标记
+    //    与当前指纹一致」。为什么不能只看解释器是否存在，见 probe_backend_imports 的说明。
+    //    指纹同时覆盖三种真实故障：① 上次装到一半失败；② uv.lock 变了（App 升级）；
+    //    ③ 安装目录迁移（editable 的 .pth 指向旧路径）。
+    //    命中时**零成本**（不 spawn 子进程）—— 这是安全的，因为标记只在探测通过后才写。
+    let sentinel_path = local_data.join(DEPS_SENTINEL);
+    let expected_fp = deps_fingerprint(&backend_dir);
+    let env_ready = venv_python.exists()
+        && fs::read_to_string(&sentinel_path)
+            .map(|s| s.trim() == expected_fp)
+            .unwrap_or(false);
+
+    if !env_ready {
         eprintln!(
             "[desktop] first launch: installing base dependencies via uv (~0.8GB, may take minutes)..."
         );
@@ -155,6 +241,16 @@ fn bootstrap_and_spawn(app: &tauri::AppHandle) {
             "--extra".to_string(),
             "rag".to_string(),
             "--frozen".to_string(),
+            // ★★ `--inexact` = **绝不删除环境里已有的"多余"包**，这是本段的安全阀。
+            //    为什么必须有：本段用 `--no-install-package` 排除了 torch 等重依赖，
+            //    而 `uv sync` 默认是**精确模式**（会剪掉不在期望集合里的包）。
+            //    一旦用户点过「准备运行环境」补装好 4.0GB 的 torch/CUDA，
+            //    此后本段**只要再跑到一次**（例如 App 升级换了 uv.lock 指纹），
+            //    精确模式就会把刚下好的 4GB **剪掉** ⇒ 真实语义检索静默失效，
+            //    而用户只看到"又变回假检索了"，极难定位。
+            //    `uv sync --help` 原文（已核对包内 uv 0.12.23）：
+            //      `--inexact  Do not remove extraneous packages present in the environment`
+            "--inexact".to_string(),
             // ★ 强制使用捆绑的 Portable Python，避免 uv 联网另下一份 Python
             "--python".to_string(),
             python_exe.to_string_lossy().to_string(),
@@ -179,12 +275,33 @@ fn bootstrap_and_spawn(app: &tauri::AppHandle) {
             Ok(s) if s.success() => {}
             Ok(s) => {
                 eprintln!("[desktop] uv sync failed: {}", s);
+                eprintln!(
+                    "[desktop] (uv's own output above has the cause; the app will retry on next launch)"
+                );
                 return;
             }
             Err(e) => {
                 eprintln!("[desktop] cannot run uv.exe: {}", e);
                 return;
             }
+        }
+
+        // ★ 装完**必须验证能力**再落标记：`uv` 退出码 0 **不等于** `import` 得到
+        //   （editable 的 .pth 可能指向已失效路径、二进制 wheel 可能与本机不兼容）。
+        //   标记一旦写入，后续启动就会**跳过安装** ⇒ 必须保证"标记为真 ⟹ 环境真的可用"。
+        if !probe_backend_imports(&venv_python, &backend_dir) {
+            eprintln!(
+                "[desktop] uv sync reported success but backend imports still fail; NOT writing the deps marker so the next launch will retry."
+            );
+            return;
+        }
+        // 落标记失败**不影响本次运行**（环境已可用）：最坏后果只是下次启动多跑一次
+        // 幂等的 `uv sync`。所以这里刻意不 return。
+        if let Err(e) = fs::write(&sentinel_path, format!("{expected_fp}\n")) {
+            eprintln!(
+                "[desktop] could not write deps marker {:?}: {}",
+                sentinel_path, e
+            );
         }
     }
 

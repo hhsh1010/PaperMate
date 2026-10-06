@@ -53,6 +53,21 @@ Copy-Item "$root/pyproject.toml" "$backend/"
 Copy-Item "$root/uv.lock"        "$backend/"
 Copy-Item "$root/.env.example"   "$backend/"
 
+# ★★ 凡 `pyproject.toml` 元数据里**引用到的文件**都必须一并拷过来 ——
+#    否则首启 `uv sync` 在构建项目自身（editable 安装）时会失败。
+#    2026-10-06 实测事故：
+#      `Building papermate @ file:///.../resources/backend`
+#      → `hatchling.build.build_editable` 失败
+#      → `OSError: Readme file does not exist: README.md`
+#    根因就是本脚本此前只拷 pyproject.toml / uv.lock / .env.example，**漏了 README.md**。
+#    ⚠️ 新增/修改 pyproject 的 readme / license.file 等字段时，**必须同步这里**。
+#       `tests/test_build_resources_contract.py` 会静态校验这一致性。
+foreach ($meta in @("README.md", "LICENSE")) {
+    if (Test-Path "$root/$meta") {
+        Copy-Item "$root/$meta" "$backend/"
+    }
+}
+
 # 3) 构建前端（若 dist 缺失）
 if (-not (Test-Path "$backend/web/dist/index.html")) {
     Write-Host "[build-resources] building frontend (npm ci + build)..."
