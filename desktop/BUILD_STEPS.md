@@ -287,8 +287,27 @@ npx tauri icon src-tauri/icons/logo-source.png
 
 ## 第 6 步 · ★ `cargo check`（验证 `lib.rs` 的改动能编译）
 
+> ### 先跑 6.0：离线校验 `tauri.conf.json`（**不需要 Rust，秒级**）
+>
+> `tauri.conf.json` 唯一会被校验的时机是打包时（Rust 的 `tauri-build` 用 serde 解析），
+> 所以在没有 Rust 的环境里，配置错误会一路漏到出包才炸。本仓库提供了离线校验：
+>
+> ```powershell
+> cd <项目根>
+> .venv\Scripts\python.exe scripts\validate_tauri_config.py
+> ```
+> ✅ 判据：`✅ desktop\src-tauri\tauri.conf.json 通过 Tauri 2 schema 校验`
+>
+> ⚠️ 别小看这一步。实测踩到：`webviewInstallMode` 写成 `{"mode": "..."}`，
+> 而它其实是 **tagged enum**、键名必须是 `type` ⇒ serde 报
+> `missing field 'type'`（**文案说"缺字段"，真实原因是"键名写错"**，很有误导性）。
+> 同一轮还查出 `signCommand` 用了 `pwsh` (PowerShell 7)，而**多数机器没装 pwsh** ⇒
+> `tauri build` 会在签名环节失败。这两个错都只需这一条命令就能提前发现。
+>
+> 官方 schema 已随仓库分发（`desktop/src-tauri/tauri.schema.json`，169KB），**完全离线**。
+
 ```powershell
-cd src-tauri
+cd desktop\src-tauri
 cargo check
 ```
 ✅ 判据：末尾出现 `Finished` 且**无 error**

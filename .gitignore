@@ -7,7 +7,9 @@ __pycache__/
 .pytest_cache/
 # L0 首装仿真/门禁排查用的临时 basetemp（2026-10-06）：pytest 显式指定它可跳过
 # 自身对 %TEMP%\pytest-of-* 的垃圾回收，从而绕开沙箱批量删除保护。
-.l0_bt/
+# ⚠️ 用 `.l0_bt*/` 通配而不是逐个列出：排查时随手起的目录名会变（.l0_bt / .l0_bt2 / …），
+#    漏一条就会把上千个临时文件提交进仓库。
+.l0_bt*/
 .l0_tmp/
 .ruff_cache/
 .mypy_cache/

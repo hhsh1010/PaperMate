@@ -40,11 +40,22 @@
       "icons/icon.ico"
     ],
     "windows": {
-      "webviewInstallMode": { "mode": "downloadBootstrapper" },
+      "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },
       "nsis": {
         "displayLanguageSelector": true
       },
-      "signCommand": "pwsh scripts/codesign.ps1 -FileToSign \"%1\""
+      "signCommand": {
+        "cmd": "powershell",
+        "args": [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          "scripts/codesign.ps1",
+          "-FileToSign",
+          "%1"
+        ]
+      }
     }
   },
   "plugins": {
