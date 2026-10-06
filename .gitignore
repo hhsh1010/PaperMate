@@ -31,8 +31,14 @@ data/
 *.sqlite3
 *.tmp
 
-# ---- 前端 ----
-web/node_modules/
+# ---- 前端 / Node ----
+# ⚠️ 2026-10-06 修复：原先只写 `web/node_modules/`（路径特定），
+#    导致新增的 `desktop/node_modules/`（`npm install` 装的 Tauri CLI）**未被忽略**
+#    ⇒ 只要一次 `git add -A` 就会把上万个文件提交进仓库。
+#    ⇒ 改为**通用裸模式** `node_modules/`（匹配任意层级）。
+#    ★ 判别两种写法的取舍：这里的名字（node_modules）**不可能与源码包同名**，
+#      所以用裸模式是安全的；而 `models/` 那种会撞源码包名的，必须锚定成 `/models/`。
+node_modules/
 web/dist/
 web/dist.old/
 
