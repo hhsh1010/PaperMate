@@ -62,6 +62,12 @@ _SLOW_FILES = {
     "test_async_upload.py",  # 取消中途上传（asyncio.sleep 2s → 2.70s）
     "test_docx_edit.py",     # 持久化编辑锁（2.35s）
     "test_eval_judge.py",    # 判定器超时路径（1.53s + 1.52s）
+    # 2026-06-06 新增：本文件反复把 torch 从 sys.modules 里摘掉再恢复 ⇒ 每次都要
+    # 冷读 4GB 的 torch 包目录。实测**串行仅 28s，但 -n 3 并行退化到 207s**
+    # （多 worker 同时读同一批 .pyd 的磁盘争用，非用例本身慢）。
+    # ⇒ 放进 slow 集合，日常门禁 `-m "not slow"` 跳过；命名映射那条快测试已单独拆出
+    #   （test_heavy_names_mapping_is_consistent，零导入、毫秒级）继续覆盖日常回归。
+    "test_rag_deps_light_boot.py",
 }
 
 #: 需要真实 GPU 或真实模型权重的文件。

@@ -739,12 +739,23 @@ export interface RagModelsOut {
   embedder: string;
   /** HF 缓存盘余量（GB）；无法探测时为 null */
   disk_free_gb: number | null;
+  /** ★ 运行环境（torch / FlagEmbedding / sentence-transformers，约 4GB）是否就绪。
+   *  桌面首装**故意不装**（省 4GB）⇒ 新用户为 false，点下载会先补装依赖再下模型。 */
+  deps_ready: boolean;
+  /** 缺失明细（"未安装" 与 "装了但导入失败" 两类，后者是真故障不应反复重试） */
+  deps_missing: string[];
+  /** 能否在本机自动安装依赖（uv / venv 是否定位得到）与原因 */
+  deps_target: { uv_found?: boolean; venv_found?: boolean; reason?: string | null };
   /** 面向用户的下一步提示（含「必须重建索引」） */
   hint: string;
 }
 
 export interface RagInstallStatus {
   status: "idle" | "running" | "success" | "cancelled" | "error";
+  /** ★ 两阶段：deps（装重依赖约 4GB）→ models（下权重约 4.5GB）。
+   *  桌面首装 deps_ready=false ⇒ 第一次点「下载」先跑 deps 段。
+   *  ⚠️ deps 段**没有文件级进度**（uv 不上报），percent 在该段不可信 ⇒ 展示为不确定进度条。 */
+  phase: "deps" | "models" | null;
   models: string[];
   current: string | null;
   current_file: string | null;

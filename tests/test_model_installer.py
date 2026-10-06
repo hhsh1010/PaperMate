@@ -437,7 +437,84 @@ def test_api_cancel_without_task_returns_409(client):
     assert r.status_code == 409
 
 
-# ───────────────────────── 8. 首启默认必须是 fake ─────────────────────────
+# ───────────────────────── 9. 两阶段安装（deps → models）─────────────────────────
+def test_install_runs_deps_phase_before_models(monkeypatch):
+    """★ 桌面首装场景：重依赖缺失 ⇒ 必须先装依赖（约 4GB）再下模型。
+
+    这是"首启只装 0.76GB"方案能成立的前提：否则点下载后 BGE-M3 直接 import 失败。
+    """
+    order: list[str] = []
+    monkeypatch.setattr(mi.rag_deps, "probe", lambda **kw: _Deps(False))
+    monkeypatch.setattr(mi.rag_deps, "sync_heavy_deps",
+                        lambda **kw: order.append("deps") or "ok")
+    _patch_hub(monkeypatch, download=lambda repo, name, **kw: order.append(f"dl:{name}") or "")
+
+    inst = ModelInstaller()
+    inst.install(["embedder"])
+    end = _wait_done(inst)
+    assert end["status"] == "success", end.get("error")
+    assert order[0] == "deps", f"依赖安装必须是第一步，实际顺序：{order[:3]}"
+    assert any(x.startswith("dl:") for x in order)
+    assert end["phase"] == "models"
+
+
+def test_install_skips_deps_when_already_ready(monkeypatch):
+    """开发机/服务端依赖已齐 ⇒ **不得**重复跑 uv sync（否则白等几分钟）。"""
+    called: list[str] = []
+    monkeypatch.setattr(mi.rag_deps, "probe", lambda **kw: _Deps(True))
+    monkeypatch.setattr(mi.rag_deps, "sync_heavy_deps", lambda **kw: called.append("deps"))
+    _patch_hub(monkeypatch)
+
+    inst = ModelInstaller()
+    inst.install(["embedder"])
+    end = _wait_done(inst)
+    assert end["status"] == "success", end.get("error")
+    assert called == [], "依赖已就绪时不应调用 sync_heavy_deps"
+
+
+def test_install_reports_deps_failure(monkeypatch):
+    """依赖安装失败 ⇒ status=error 且带**可读**原因（不是裸 ImportError）。"""
+    monkeypatch.setattr(mi.rag_deps, "probe", lambda **kw: _Deps(False))
+
+    def _boom(**kw):
+        raise mi.rag_deps.DepsInstallError("未找到捆绑的 uv.exe（请确认安装包完整）")
+
+    monkeypatch.setattr(mi.rag_deps, "sync_heavy_deps", _boom)
+    _patch_hub(monkeypatch)
+
+    inst = ModelInstaller()
+    inst.install(["embedder"])
+    end = _wait_done(inst)
+    assert end["status"] == "error"
+    assert "uv.exe" in (end["error"] or "")
+    assert end["phase"] == "deps"
+
+
+def test_models_exposes_deps_state(monkeypatch, tmp_path):
+    """首屏必须告诉前端"还要装 4GB 依赖"，否则用户点了才知道。"""
+    monkeypatch.setattr(mi, "probe_installed", lambda spec: None)
+    monkeypatch.setattr(mi, "cache_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(mi.rag_deps, "probe", lambda **kw: _Deps(False, ["torch：未安装"]))
+    monkeypatch.setattr(mi.rag_deps, "describe_target", lambda: {"uv_found": False, "reason": "x"})
+
+    from papermate import runtime_settings as rs
+
+    monkeypatch.setattr(rs, "get_state", lambda: {"rag_embedder": "fake"})
+    out = ModelInstaller().models()
+    assert out["deps_ready"] is False
+    assert out["deps_missing"] == ["torch：未安装"]
+    assert "4GB" in out["hint"], out["hint"]
+
+
+class _Deps:
+    """`rag_deps.DepsStatus` 的极简替身（只带本测试用到的字段）。"""
+
+    def __init__(self, ready: bool, missing: list[str] | None = None) -> None:
+        self.ready = ready
+        self.missing = missing or []
+        self.unknown = False
+        self.torch_cuda = None
+        self.torch_version = None
 def test_config_default_embedder_is_fake(monkeypatch):
     """★ 桌面 App 装完不能静默拉 ~4GB：首次种子必须是 fake。
 
@@ -467,3 +544,41 @@ class _S:
         self.default_embedder = embedder
         self.use_bge_sparse = False
         self.use_jieba = False
+
+
+# ───────────────────────── 10. 启用 real 的前置校验（API 层）─────────────────────────
+def test_api_rejects_real_when_deps_missing(client, monkeypatch):
+    """★ 缺依赖时切 real 必须被**当场拒绝**，而不是保存成功、检索时才 500。"""
+    from papermate.api import routes_settings as rs_api
+    from papermate.services import rag_deps as rd
+
+    monkeypatch.setattr(rd, "probe", lambda **kw: _Deps(False, ["torch：未安装", "FlagEmbedding：未安装"]))
+    monkeypatch.setattr(rd, "describe_target", lambda: {"reason": "未找到应用私有 venv"})
+
+    r = client.put("/api/v1/settings", json={"rag_embedder": "real"})
+    assert r.status_code == 400, r.text
+    d = r.json()["detail"]
+    assert "torch" in d and "4GB" in d and "下载模型" in d
+    assert rs_api.router is not None  # 仅确保导入路径正确
+
+
+def test_api_allows_real_when_deps_ready(client, monkeypatch):
+    """依赖就绪时切 real 必须放行（否则把正常路径也堵死）。"""
+    from papermate.services import rag_deps as rd
+
+    monkeypatch.setattr(rd, "probe", lambda **kw: _Deps(True))
+    r = client.put("/api/v1/settings", json={"rag_embedder": "real"})
+    assert r.status_code == 200, r.text
+    assert r.json()["rag_embedder"] == "real"
+    # 复位，避免影响同文件后续用例
+    client.put("/api/v1/settings", json={"rag_embedder": "fake"})
+
+
+def test_api_fake_always_allowed(client, monkeypatch):
+    """★ 缺依赖**不得**阻止用户保存其它设置或切回 fake（校验只拦 real 这一条路）。"""
+    from papermate.services import rag_deps as rd
+
+    monkeypatch.setattr(rd, "probe", lambda **kw: _Deps(False, ["torch：未安装"]))
+    r = client.put("/api/v1/settings", json={"rag_embedder": "fake", "use_jieba": True})
+    assert r.status_code == 200, r.text
+    assert r.json()["rag_embedder"] == "fake"

@@ -1046,6 +1046,31 @@ export function SettingsPage() {
             <div className="settings-field">
               <span className="settings-label">{lang === "zh" ? "语义检索模型（约 4.5GB）" : "Semantic retrieval models (~4.5GB)"}</span>
               {ragModelsErr && <span className="settings-hint">{ragModelsErr}</span>}
+              {/* ① 运行环境（重依赖）—— 桌面首装刻意不装，点下载时才会补装。
+                  必须单独显示，否则用户点下去才发现要先下 4GB，会以为坏了。 */}
+              {ragModels && (
+                <span className="settings-hint">
+                  {lang === "zh" ? "运行环境（PyTorch 等，约 4GB）：" : "Runtime deps (PyTorch etc., ~4GB): "}
+                  {ragModels.deps_ready ? (
+                    <b style={{ color: "var(--color-text-success, #3B6D11)" }}>
+                      {lang === "zh" ? "已就绪" : "ready"}
+                    </b>
+                  ) : (
+                    <b style={{ color: "var(--color-text-warning, #854F0B)" }}>
+                      {lang === "zh" ? "未安装（点下方按钮会自动补装）" : "not installed (installed by the button below)"}
+                    </b>
+                  )}
+                  {!ragModels.deps_ready && ragModels.deps_missing.length > 0 && (
+                    <span style={{ opacity: 0.75 }}>
+                      {" · "}
+                      {ragModels.deps_missing.map((m) => m.split("：")[0]).join("、")}
+                    </span>
+                  )}
+                  {!ragModels.deps_ready && !ragModels.deps_target?.uv_found && ragModels.deps_target?.reason && (
+                    <span style={{ opacity: 0.75 }}>{" · "}{ragModels.deps_target.reason}</span>
+                  )}
+                </span>
+              )}
               {ragModels && (
                 <ul className="settings-hint" style={{ margin: 0, paddingLeft: "1.1em", listStyle: "disc" }}>
                   {ragModels.models.map((m) => (
@@ -1071,21 +1096,23 @@ export function SettingsPage() {
             {ragInstall && ragInstall.status === "running" ? (
               <div className="reindex-viz" role="status" aria-live="polite">
                 <div className="reindex-bar-track">
+                  {/* deps 段：uv 不上报文件级进度 ⇒ 百分比在此段**不可信** ⇒ 不确定进度条。
+                      假装有进度比没有进度更糟（用户会以为卡住了）。 */}
                   <div
-                    className={`reindex-bar${ragInstall.file_total === 0 ? " indeterminate" : ""}`}
+                    className={`reindex-bar${ragInstall.phase === "deps" || ragInstall.file_total === 0 ? " indeterminate" : ""}`}
                     style={{
-                      width: ragInstall.file_total > 0
-                        ? `${Math.round((Math.min(ragInstall.file_index, ragInstall.file_total) / ragInstall.file_total) * 100)}%`
-                        : "100%",
+                      width:
+                        ragInstall.phase === "models" && ragInstall.file_total > 0
+                          ? `${Math.round((Math.min(ragInstall.file_index, ragInstall.file_total) / ragInstall.file_total) * 100)}%`
+                          : "100%",
                     }}
                   />
                 </div>
                 <div className="reindex-meta">
-                  {/* ⚠️ 显示的是**文件数**进度：单个 2GB 权重在下完之前这一格不会动，
-                      所以文案必须写"第 i/N 个文件"，不能假装是字节百分比。 */}
                   <span>
                     {ragInstall.message}
-                    {ragInstall.file_total > 0
+                    {/* 文件数进度只在 models 段有意义 */}
+                    {ragInstall.phase === "models" && ragInstall.file_total > 0
                       ? `（${ragInstall.file_index}/${ragInstall.file_total}）`
                       : ""}
                   </span>
@@ -1096,7 +1123,9 @@ export function SettingsPage() {
                     {lang === "zh" ? "取消下载" : "Cancel"}
                   </button>
                   <span className="settings-hint">
-                    {lang === "zh" ? "取消后已下载的部分会被缓存，下次继续。" : "Cached progress is kept for resume."}
+                    {lang === "zh"
+                      ? "取消后已下载的部分会被缓存，下次继续。依赖安装阶段可能需要几分钟才生效。"
+                      : "Cached progress is kept for resume. The dependency phase may take minutes to report."}
                   </span>
                 </div>
               </div>
@@ -1105,17 +1134,21 @@ export function SettingsPage() {
                 <button
                   type="button"
                   className="btn-primary"
-                  disabled={!ragModels || ragModels.all_installed}
+                  disabled={!ragModels || (ragModels.all_installed && ragModels.deps_ready)}
                   onClick={() => startRagInstall()}
                 >
-                  {ragModels?.all_installed
-                    ? (lang === "zh" ? "模型已就绪" : "Models ready")
-                    : (lang === "zh" ? "下载模型" : "Download models")}
+                  {!ragModels
+                    ? (lang === "zh" ? "加载中…" : "Loading…")
+                    : ragModels.all_installed && ragModels.deps_ready
+                      ? (lang === "zh" ? "已全部就绪" : "All ready")
+                      : ragModels.deps_ready
+                        ? (lang === "zh" ? "下载模型（约 4.5GB）" : "Download models (~4.5GB)")
+                        : (lang === "zh" ? "准备环境并下载（约 8.5GB）" : "Prepare env & download (~8.5GB)")}
                 </button>
                 <span className="settings-hint">
                   {lang === "zh"
-                    ? "下载需要 10~60 分钟（取决于网络）。完成后请在下方把「嵌入模式」切到 real 并点「重建索引」。"
-                    : "Takes 10–60 min depending on network. Then switch Embedding mode to real and reindex below."}
+                    ? "将依次完成：① 补装 PyTorch 等运行环境（约 4GB）② 下载 BGE-M3 与重排模型（约 4.5GB）。完成后请把「嵌入模式」切到 real 并点「重建索引」。"
+                    : "Runs: (1) install PyTorch runtime deps (~4GB), (2) download BGE-M3 + reranker weights (~4.5GB). Then switch Embedding mode to real and reindex."}
                 </span>
               </div>
             )}
