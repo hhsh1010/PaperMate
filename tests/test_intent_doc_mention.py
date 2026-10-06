@@ -88,8 +88,9 @@ def client():
     import os
     import tempfile
 
-    import papermate.config as cfg_mod
     from fastapi.testclient import TestClient
+
+    import papermate.config as cfg_mod
 
     tmp = tempfile.mkdtemp(prefix="papermate_intent_mention_test_")
     os.environ["PAPERMATE_DATA_DIR"] = tmp
