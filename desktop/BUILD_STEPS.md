@@ -503,7 +503,7 @@ cd <项目根>\desktop
 
 | 检查 | 期望 | 怎么查 |
 |---|---|---|
-| 窗口不白屏 | 等待后自动跳到界面 | 眼看 |
+| 窗口不白屏 | **先看到「正在启动本地服务… 已等待 N 秒」**，后端就绪后自动跳到界面 | 眼看 |
 | 日志无 `uv sync failed` | 首启成功 | 窗口日志 |
 | **venv 里没有 torch** | ★ 这是本轮优化的核心 | 见下方命令 |
 | 后端健康 | `rag_embedder=fake` | `curl.exe http://127.0.0.1:8000/api/v1/healthz` |
@@ -554,6 +554,8 @@ Test-Path "$env:LOCALAPPDATA\PaperMate\venv\Lib\site-packages\torch"
 | 点过「准备运行环境」后 `torch` 又不见了 | ★★ 首启那段 `uv sync` 重跑了一次，**精确模式把"多余"包剪掉**（只在指纹变化时发生：换 lock / 换安装目录） | 已修：首启带 `--inexact`（绝不删除环境里已有的包）。诊断：`uv sync --dry-run` 若打印 ` - pkg==ver` 就是**会删** |
 | **换了构建方式（debug ↔ release）后"改了没生效"** | ★★ venv 固定在 `%LOCALAPPDATA%\PaperMate\venv`，**debug / release 共用同一份**；而 editable 的 `.pth` 仍指向**旧 profile** 的 `resources/backend/src`。uv 见 `papermate==0.1.0` **已满足就不再重装** ⇒ exe **静默 import 旧那份源码** | 删 `%LOCALAPPDATA%\PaperMate\venv`（最省事），或仅删 `_editable_impl_papermate.pth` + `papermate-0.1.0.dist-info`，再启动 |
 | **首装跑到一半关了窗口 / 装完了却没写 `deps-ready`** | 写标记的是 App 进程；窗口一关它就没了，uv 虽继续跑完但**没人写标记** ⇒ 下次启动还会重跑一遍 `uv sync` | 重启 App 让它自己补（缓存已热，很快）；或直接删 `deps-ready` 强制重走一遍 |
+| **窗口停在"无法访问此页面"（连接被拒），或一直转圈不跳转** | ★★ 窗口的**首个页面不能取自后端** —— Tauri 的顺序是「先按配置建窗口 → 再跑 `setup` 里的起后端」⇒ 窗口第一帧必然早于后端。旧配置把 `windows[0].url` 指向 `http://127.0.0.1:8000/loading.html`，于是后端慢/挂时窗口停在 WebView2 错误页且**永不自愈**（10-07 已改为**包内本地**等待页 + Rust 就绪后 `eval` 导航） | 确认 `tauri.conf.json` 的 `windows[0].url` 是 **`"loading.html"`**（不是 http 地址），且 `frontend-dist/loading.html` 存在。改完需**重编译**才生效 |
+| 首启失败但窗口只说"正在启动"、看不到原因 | 旧版错误只打 stdout/stderr，双击启动时**根本没有控制台** | 10-07 起失败原因会由 `show_startup_error()` 直接写进窗口（含"下次启动会自动重试"与可操作的路径） |
 
 ---
 
