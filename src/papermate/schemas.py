@@ -940,10 +940,19 @@ class RagModelsOut(BaseModel):
     """设置页「语义检索」卡片的首屏数据。"""
 
     models: list[RagModelItem]
-    all_installed: bool           # 两个都就绪 ⇒ 可以启用 real
+    all_installed: bool           # 两个权重都就绪 ⇒ 可以考虑启用 real
     enabled: bool                 # 当前 runtime settings 的 rag_embedder == real
     embedder: str                 # 当前生效值（fake | real）
     disk_free_gb: float | None    # HF 缓存盘余量（无法探测时为 None）
+    # ---- 运行环境（重依赖）状态（2026-06-06）----
+    #: torch / FlagEmbedding / sentence-transformers 是否可导入。
+    #: ★ 桌面首启**故意不装**（lib.rs 用 --no-install-package 排除，约省 4GB），
+    #:   所以新用户这里为 false —— 点「下载」会先补装依赖再下模型。
+    deps_ready: bool
+    #: 缺失明细（含"未安装"与"装了但导入失败"两种，后者是真故障不能反复重试）
+    deps_missing: list[str] = Field(default_factory=list)
+    #: 能否在本机自动安装依赖（uv/venv 是否定位得到）与原因
+    deps_target: dict[str, Any] = Field(default_factory=dict)
     hint: str                     # 面向用户的下一步提示（含"必须重建索引"）
 
 
@@ -962,6 +971,10 @@ class RagInstallStatusOut(BaseModel):
     """
 
     status: str          # idle | running | success | cancelled | error
+    #: ★ 两阶段：``deps``（装重依赖约 4GB）→ ``models``（下权重约 4.5GB）。
+    #:   桌面首装 deps_ready=false ⇒ 第一次点「下载」会先跑 deps 段。
+    #:   前端据此显示不同文案，**不要**把 deps 段的进度当成模型下载进度。
+    phase: str | None = None
     models: list[str]
     current: str | None = None
     current_file: str | None = None

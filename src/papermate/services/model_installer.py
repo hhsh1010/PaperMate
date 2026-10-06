@@ -41,6 +41,8 @@ from lightcore.rag.hf_local import (
     resolve_local_hf_snapshot,
 )
 
+from . import rag_deps
+
 logger = logging.getLogger(__name__)
 
 GB = 1024 ** 3
@@ -235,8 +237,11 @@ def probe_installed(spec: RagModelSpec, *, resolver=resolve_local_hf_snapshot) -
 def _idle_state() -> dict:
     return {
         "status": "idle",        # idle | running | success | cancelled | error
+        # ★ phase: deps（装重依赖，约 4GB）→ models（下模型权重，约 4.5GB）→ done
+        #   桌面首启只装了轻量依赖（见 rag_deps 模块文档），所以第一次点「下载」实际要跑两段。
+        "phase": None,           # None | deps | models
         "models": [],            # 本轮目标 model keys
-        "current": None,         # 当前正在下的 key
+        "current": None,         # 当前正在下的 key（phase=models 时有意义）
         "current_file": None,    # 当前文件名（真实进度的最小单位）
         "file_index": 0,
         "file_total": 0,
@@ -291,11 +296,21 @@ class ModelInstaller:
                 "local_path": path,
             })
         all_installed = all(it["installed"] for it in items)
+        # ★ 重依赖（torch / FlagEmbedding / sentence-transformers，约 4GB）：桌面首启**故意没装**
+        #   （见 rag_deps 模块文档），点「下载」时先补装再下模型。
+        #   开发机 / 服务端本来就装了 ⇒ probe 为 ready ⇒ 自动跳过该段，不会重复下载。
+        deps = rag_deps.probe()
         if enabled:
             hint = "已启用真实语义检索。切换（尤其是从 real 切回）或新增文档后，**重建索引**才会生效。"
-        elif all_installed:
-            hint = ("权重已就绪，但当前仍是占位嵌入。请在上方把『嵌入模型』切到 real 并保存，"
+        elif all_installed and deps.ready:
+            hint = ("权重与运行环境均已就绪，但当前仍是占位嵌入。请在上方把『嵌入模式』切到 real 并保存，"
                     "然后到文档列表执行**重建索引** —— 不重建则检索结果不会变。")
+        elif all_installed:
+            hint = ("权重已就绪，但**运行环境未就绪**（缺 torch 等重依赖）。"
+                    "点『下载模型』补装依赖后再启用，或暂时继续用占位嵌入。")
+        elif not deps.ready:
+            hint = ("当前使用占位嵌入（零依赖、秒级，但**没有真实语义**）。"
+                    "点『下载模型』将依次完成：① 准备运行环境（约 4GB）② 下载模型权重（约 4.5GB）。")
         else:
             hint = ("当前使用占位嵌入（零依赖、秒级，但**没有真实语义**）。"
                     "点『下载模型』获取真实语义能力（约 4.5GB，取决于网络可能需 10~60 分钟）。")
@@ -307,6 +322,10 @@ class ModelInstaller:
             # ★ 目录不存在（新用户首装）时回退到最近的存在祖先，而不是给 None ——
             #   "磁盘够不够 4.5GB" 是首屏决策信息，给"未知"等于让用户盲点下载。
             "disk_free_gb": free_space_gb(),
+            # 运行环境（重依赖）状态：桌面首装为 false ⇒ 需先补装再下模型
+            "deps_ready": deps.ready,
+            "deps_missing": list(deps.missing),
+            "deps_target": rag_deps.describe_target(),
             "hint": hint,
         }
 
@@ -351,8 +370,22 @@ class ModelInstaller:
             self._state.update(kw)
 
     def _worker(self, keys: list[str], cancel: threading.Event) -> None:
-        n = len(keys)
         try:
+            # ── 阶段 1/2：运行环境（重依赖，约 4GB）──────────────────────────────
+            # 桌面首启只装了轻量依赖（torch 等被 lib.rs 用 --no-install-package 排除），
+            # 所以第一次点「下载」必须先把依赖补齐，否则 BGE-M3 根本 import 不了。
+            # 开发机/服务端依赖已齐 ⇒ 直接跳过，不产生任何额外下载。
+            if not rag_deps.probe().ready:
+                self._set(phase="deps", percent=0.0, current=None, current_file=None,
+                          message="正在准备运行环境（安装 torch 等重依赖，约 4GB，请保持联网）…")
+                if cancel.is_set():
+                    raise InstallCancelled()
+                rag_deps.sync_heavy_deps(cancel=cancel)
+                self._set(percent=100.0, message="运行环境准备完成，开始下载模型权重…")
+
+            # ── 阶段 2/2：模型权重（约 4.5GB）──────────────────────────────
+            n = len(keys)
+            self._set(phase="models")
             for mi, key in enumerate(keys):
                 spec = MODEL_SPECS[key]
                 base = mi / n * 100.0
@@ -360,11 +393,16 @@ class ModelInstaller:
                           percent=round(base, 1), message=f"准备下载 {spec.label}…")
                 self._download(spec, cancel, base=base, span=100.0 / n)
                 self._set(percent=round((mi + 1) / n * 100.0, 1), current_file=None)
-            self._set(status="success", percent=100.0, finished_at=time.time(),
-                      current=None, message="下载完成。请在设置页启用真实语义检索并重建索引。")
+            self._set(status="success", percent=100.0, finished_at=time.time(), phase="models",
+                      current=None,
+                      message="下载完成。请在设置页启用真实语义检索并重建索引。")
         except InstallCancelled:
             self._set(status="cancelled", finished_at=time.time(), current=None,
                       error="已取消下载", message="已取消。已下载的部分会被缓存，下次继续。")
+        except rag_deps.DepsInstallError as e:
+            logger.warning("运行环境安装失败：%s", e)
+            self._set(status="error", finished_at=time.time(), current=None,
+                      error=str(e), message="运行环境准备失败")
         except ModelInstallError as e:
             logger.warning("语义检索模型安装失败：%s", e)
             self._set(status="error", finished_at=time.time(), current=None,

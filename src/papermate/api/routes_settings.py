@@ -142,6 +142,25 @@ def put_settings(body: SettingsUpdate, request: Request) -> dict:
         payload["rag_reranker_fp16"] = body.rag_reranker_fp16
     if body.rag_reranker_max_length is not None:
         payload["rag_reranker_max_length"] = body.rag_reranker_max_length
+    # ★ 前置校验（2026-06-06）：切 real 之前必须确认重依赖可用，否则用户会"保存成功"，
+    #   直到第一次检索才炸出 `ModuleNotFoundError: No module named 'FlagEmbedding'`（500，且难懂）。
+    #   桌面首启刻意不装 torch 等（省 4GB）⇒ 这条校验是那个设计能成立的前提。
+    if body.rag_embedder == "real":
+        from ..services import rag_deps
+
+        deps = rag_deps.probe()
+        if not deps.ready:
+            reason = rag_deps.describe_target().get("reason")
+            tail = f"（{reason}）" if reason else ""
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "尚未安装真实语义检索所需的运行环境"
+                    f"（缺 {'、'.join(m.split('：')[0] for m in deps.missing)}，约 4GB）。"
+                    "请先在设置页「语义检索」卡片点『下载模型』，它会先补装依赖再下载权重。"
+                    f"若按钮不可用{tail}。"
+                ),
+            )
     out = update(payload)
     # 切换记忆向量引擎：丢弃共享单例，下次取用时按新引擎重建并重算已有记忆的向量
     if body.memory_embedder is not None:
