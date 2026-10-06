@@ -1,66 +1,64 @@
-# PaperMate 单机部署（Docker Compose）
+# PaperMate 服务端部署（Nginx 反代 + 回滚友好镜像 tag）
 #
-# 安全默认（重要）：本项目**没有鉴权机制**，因此这里
-#   - 容器内监听 0.0.0.0（必需，否则宿主访问不到）
-#   - 但**宿主端口只映射到 127.0.0.1** → 仅本机可访问，局域网/公网都进不来
-# 想给局域网访问，请把 ports 改成 "<宿主IP>:8000:8000" 并自行评估网络环境
-# （也可设 PAPERMATE_ACCEPT_PUBLIC_EXPOSURE=1 关闭启动告警）。
+# 安全默认：本项目无鉴权。papermate 仅对内网 expose（不映射宿主机端口），
+# 由 nginx 统一出口；默认 nginx 也只绑 127.0.0.1，仅供本机访问。
+# 需局域网/公网访问：把 ports 改为 "0.0.0.0:${HTTP_PORT}:80" 并自行评估风险
+# （或在 nginx 前加一层鉴权 / WAF）。
 #
 # 用法：
-#   1) cd web && npm ci && npm run build          # 先构建前端产物
-#   2) cp .env.example .env                        # 按需填模型密钥
-#   3) docker compose -f deploy/docker-compose.yml up -d --build
-#   4) curl http://127.0.0.1:8000/api/v1/healthz   # 自检
+#   1) cd web && npm ci && npm run build
+#   2) cp .env.example .env            # 模型密钥（不入库）
+#   3) cp deploy/.env.example deploy/.env   # 镜像 tag / 端口等
+#   4) docker compose -f deploy/docker-compose.yml up -d --build
+#   5) curl http://127.0.0.1/api/v1/healthz
 
 services:
   papermate:
-    build:
-      # 上下文是项目根（Dockerfile 需要 pyproject/uv.lock/src/web/dist）
-      context: ..
-      dockerfile: deploy/Dockerfile
-    image: papermate:local
+    image: ${REGISTRY:-ghcr.io/your-org}/papermate:${TAG:-latest}
     container_name: papermate
     restart: unless-stopped
-
-    ports:
-      # 只映射回环 —— 无鉴权服务的安全默认
-      - "127.0.0.1:8000:8000"
-
+    # 只对内网暴露，由 nginx 反代；不映射宿主机端口
+    expose:
+      - "8000"
     env_file:
-      # 模型密钥等（该文件在 .gitignore 中，不入库）
       - ../.env
-
     environment:
-      # 容器内需监听 0.0.0.0；对外可达性由上面的端口映射决定
       PAPERMATE_HOST: "0.0.0.0"
       PAPERMATE_DATA_DIR: "/data"
-      # 国内网络建议启用 HF 镜像（模型首次下载会用到）
       HF_ENDPOINT: "${HF_ENDPOINT:-https://hf-mirror.com}"
-
     volumes:
-      # 业务数据：SQLite / faiss 索引 / 上传的原文件。**必须持久化**
       - papermate-data:/data
-      # 模型缓存：挂宿主机的 HF 缓存可**避免每次重建容器重下 4GB+ 权重**
-      # （Windows 默认路径为 %USERPROFILE%\.cache\huggingface）
       - ${HF_CACHE:-~/.cache/huggingface}:/root/.cache/huggingface
-
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/v1/healthz', timeout=5).status==200 else 1)"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s   # 首次启动可能在建索引
+      start_period: 90s   # 首次启动可能在建索引
+    networks: [pm]
 
-    # ---- GPU 直通（可选）----
-    # 需要宿主机装 NVIDIA Container Toolkit。取消注释即启用。
-    # 注意：即便不开 GPU 也能运行，但 BGE-M3 编码会回落到 CPU（明显更慢）。
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: papermate-nginx
+    restart: unless-stopped
+    ports:
+      # 默认仅本机；局域网访问改为 "0.0.0.0:${HTTP_PORT}:80"
+      - "127.0.0.1:${HTTP_PORT:-80}:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      papermate:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1/api/v1/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks: [pm]
 
 volumes:
   papermate-data:
+
+networks:
+  pm:
+    driver: bridge

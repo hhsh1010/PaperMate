@@ -1,0 +1,15 @@
+# Docker 构建上下文（项目根）忽略项：减小镜像构建上下文、避免把本地大目录带进构建
+.git
+.venv
+**/node_modules
+**/__pycache__
+**/*.pyc
+data
+.workbuddy
+tests
+docs
+eval
+**/*.log
+.env
+.env.*
+*.md

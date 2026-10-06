@@ -1,0 +1,11 @@
+{
+  "version": "0.2.0",
+  "notes": "修复与优化（填写本次发布说明）",
+  "pub_date": "2026-10-05T00:00:00Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "REPLACE_WITH_ED25519_SIGNATURE_OF_THIS_INSTALLER",
+      "url": "https://releases.papermate.app/papermate_0.2.0_x64-setup.exe"
+    }
+  }
+}
