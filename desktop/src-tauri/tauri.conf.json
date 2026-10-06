@@ -7,7 +7,7 @@
     "beforeDevCommand": "echo noop",
     "devUrl": "http://127.0.0.1:8000",
     "beforeBuildCommand": "echo noop",
-    "frontendDist": "../frontend-dist"
+    "frontendDist": "frontend-dist"
   },
   "app": {
     "windows": [

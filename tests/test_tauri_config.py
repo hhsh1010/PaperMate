@@ -127,12 +127,53 @@ def test_sign_command_replaces_placeholder_correctly():
         assert "cmd" in sc and "args" in sc, "对象形式必须同时有 cmd 与 args"
 
 
-def test_frontend_dist_points_to_bundled_placeholder():
-    """`frontendDist` 指向的目录必须真实存在（Tauri 构建时需要它存在，哪怕只是占位页）。"""
-    dist = _ROOT / "desktop" / "src-tauri" / _cfg()["build"]["frontendDist"].replace("../", "")
-    assert dist.is_dir(), f"frontendDist 指向的目录不存在：{dist}"
-    assert Path(dist / "index.html").is_file() or Path(dist / "loading.html").is_file(), (
+def _resolve_from_config(rel: str) -> Path:
+    """按 **Tauri 的规则**解析配置里的相对路径：基准是 `tauri.conf.json` 所在目录。
+
+    ★★ 这里踩过一个大坑（2026-10-06）：初版写的是
+        `_ROOT / "desktop" / "src-tauri" / rel.replace("../", "")`
+      —— 用 `.replace()` **把 `../` 删掉**，而不是解析它。于是
+      `"../frontend-dist"` 被算成 `src-tauri/frontend-dist`（恰好存在）⇒ **测试假绿**，
+      而 Tauri 实际解析成 `desktop/frontend-dist`（不存在）⇒ 真构建失败。
+      **两把尺子：测试的路径规则 ≠ 被测系统的路径规则。**
+      ⇒ 修法：忠实复刻 Tauri 的解析方式 —— `(config_dir / rel).resolve()`。
+    """
+    return (_CONFIG_PATH.parent / rel).resolve()
+
+
+def test_frontend_dist_exists_like_tauri_resolves_it():
+    """`frontendDist` 指向的目录必须真实存在（Tauri 构建时需要，哪怕只是占位页）。"""
+    rel = _cfg()["build"]["frontendDist"]
+    dist = _resolve_from_config(rel)
+    assert dist.is_dir(), (
+        f"frontendDist={rel!r} 解析为 {dist}，该目录不存在。"
+        f"（注意：Tauri 以 tauri.conf.json 所在目录为基准解析相对路径）"
+    )
+    assert (dist / "index.html").is_file() or (dist / "loading.html").is_file(), (
         f"{dist} 下既无 index.html 也无 loading.html，窗口会白屏"
+    )
+
+
+def test_bundle_icon_files_exist_like_tauri_resolves_them():
+    """`bundle.icon` 里列的每个文件都必须存在（用与 Tauri 相同的解析规则）。
+
+    ★ 这条本可以提前抓到"`icon.ico` not found"—— 当时是等 cargo 报了才知道。
+    """
+    missing = [p for p in _cfg()["bundle"]["icon"] if not _resolve_from_config(p).is_file()]
+    assert not missing, (
+        f"bundle.icon 里这些文件不存在（Tauri 会以 tauri.conf.json 目录为基准解析）：{missing}"
+    )
+
+
+def test_bundle_resource_dirs_exist_like_tauri_resolves_them():
+    """`bundle.resources` 的每个源路径都必须存在 —— 否则 Tauri 的 build script 直接失败：
+    `resource path '...' doesn't exist`（实测在 `cargo check` 阶段就会报）。"""
+    res = _cfg()["bundle"]["resources"]
+    srcs = list(res.keys()) if isinstance(res, dict) else list(res)
+    missing = [p for p in srcs if not _resolve_from_config(p).exists()]
+    assert not missing, (
+        f"bundle.resources 里这些路径不存在：{missing}。"
+        f"先跑 desktop/scripts/build-resources.ps1 生成它们"
     )
 
 
