@@ -112,3 +112,85 @@ def test_backend_stage2_does_not_exclude_heavy_deps():
     assert "--no-install-package" not in body, \
         "sync_heavy_deps 是「补装」阶段，不能带 --no-install-package（会自我抵消）"
     assert '"sync"' in body and '"--extra"' in body, "补装阶段应照常 sync --extra rag（不加排除项）"
+
+
+# --------------------------------------------------------------------------- #
+# 2026-10-06 真机首装暴露的第二个 P0：「环境是否需要安装」的判据与安全阀
+# --------------------------------------------------------------------------- #
+def test_first_launch_uses_inexact_so_it_never_prunes_heavy_deps():
+    """★★ 首启 uv sync 必须带 `--inexact`，否则会把用户下好的 4GB 重依赖**剪掉**。
+
+    实测证据（**同一环境、同一命令，仅差这一个 flag**，用 `uv sync --dry-run` 观察；
+    实验 venv 里预置了一个假的 `torch-2.13.0.dist-info`）::
+
+        默认（精确模式）：      ` - torch==2.13.0`   ← 会**删除** torch
+        加 --inexact：          （无删除行）        ← 保留
+        两者"将安装"的集合完全相同（88 vs 88），差异**只有那一行删除**
+
+    ⇒ 首启那段只要**在重依赖装好之后再跑到一次**（指纹变化：App 升级换了 uv.lock、
+      或安装目录迁移），精确模式就会连带剪掉 torch/CUDA。用户表现是
+      "真实语义检索莫名其妙又变回假检索"，而且**没有任何报错**。
+    """
+    code = _strip_rust_comments(open(_LIB_RS, encoding="utf-8").read())
+    assert '"--inexact".to_string()' in code, (
+        "首启 uv sync 缺少 --inexact：它会把 `--no-install-package` 排除、"
+        "但**环境里已经装好**的包一起剪掉（实测 exact 模式会输出 ` - torch==2.13.0`）"
+    )
+
+
+def test_first_launch_readiness_is_capability_not_file_existence():
+    """★★ 「是否需要安装」的判据必须是**能力探测**，不能是"python.exe 是否存在"。
+
+    真实事故：`uv` 在**创建环境**阶段就把 `Scripts/python.exe` 写好了，安装发生在**其后**。
+    首启中途失败（缺 README.md ⇒ hatchling 构建本地项目失败）后，
+    venv 里只剩一个 `site-packages/_virtualenv.pth` 的**空壳**，而 python.exe 是在的。
+    旧判据 ``if !venv_python.exists()`` 被满足 ⇒ **此后每次启动都跳过安装** ⇒
+    拿空环境跑 ``-m papermate.api`` ⇒ ``No module named papermate`` ⇒
+    后端永不启动、界面永远停在"正在启动"，且**一句错误提示都没有**。
+    """
+    code = _strip_rust_comments(open(_LIB_RS, encoding="utf-8").read())
+
+    # 1) 已被证伪的"裸文件存在"判据必须消失
+    assert not re.search(r"if\s*!\s*venv_python\.exists\(\)\s*\{", code), (
+        "首启仍在用 `if !venv_python.exists()`：uv 建环境时就会写 python.exe，"
+        "安装失败后它依然存在 ⇒ 会永远跳过安装"
+    )
+    # 2) 必须有真探测函数，且真的被调用
+    assert "fn probe_backend_imports(" in code, "缺少 probe_backend_imports（能力探测）"
+    assert "probe_backend_imports(&venv_python" in code, "定义了探针却没用它"
+    # 3) 探针必须是"真 import"，不能退化成查文件
+    assert "import fastapi" in code, "探针必须是真 import（验能力），不能退化成查文件存在"
+    # 4) 标记机制的读取判据在
+    assert "DEPS_SENTINEL" in code and "fs::read_to_string(&sentinel_path)" in code, (
+        "缺少 deps-ready 标记的读取判据（0ms 快速通道）"
+    )
+
+
+def test_deps_marker_is_written_only_after_capability_probe():
+    """★★ 标记只能在「uv 退出码 0 **且**能力探测通过」之后落盘 —— 否则标记会说谎。
+
+    标记为真是后续启动**跳过安装**的唯一依据，所以它必须**蕴含**"环境真的可用"。
+    顺序反了 ⇒ 探测失败也落标记 ⇒ 下次启动跳过安装 ⇒ 永久白屏。
+    """
+    code = _strip_rust_comments(open(_LIB_RS, encoding="utf-8").read())
+    i_probe = code.index("if !probe_backend_imports(&venv_python")
+    i_write = code.index("fs::write(&sentinel_path")
+    assert i_probe < i_write, (
+        "`fs::write(&sentinel_path ...)` 出现在能力探测**之前** ⇒ "
+        "探测失败时也会落标记 ⇒ 下次启动跳过安装"
+    )
+
+
+def test_probe_does_not_import_the_api_module():
+    """探针不得 import ``papermate.api`` —— 它在导入期就 ``create_app()``。
+
+    ★ 副作用（建库/建目录）会让"探测"本身改变被测对象的状态；
+      所以探针只 import 两个**空 `__init__.py`** 的包 + fastapi/sqlalchemy。
+    """
+    code = _strip_rust_comments(open(_LIB_RS, encoding="utf-8").read())
+    m = re.search(r'args\(\["-c",\s*"([^"]+)"\]\)', code)
+    assert m, "未找到探针的 -c 参数（写法变了？请同步本测试的正则）"
+    probe = m.group(1)
+    assert "papermate.api" not in probe, f"探针不得 import papermate.api（有副作用）：{probe}"
+    assert "fastapi" in probe, f"探针应校验第三方核心依赖：{probe}"
+    assert "papermate" in probe and "lightcore" in probe, f"探针应校验两个本地包：{probe}"
