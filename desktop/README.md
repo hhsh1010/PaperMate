@@ -22,6 +22,24 @@ irm https://sh.rustup.rs -useb | iex
 cargo --version
 ```
 
+### 1.5 ★ 改了 `src/lib.rs` 之后必须先 `cargo check`
+
+**沙箱/开发环境里没有 Rust 工具链 ⇒ Rust 代码无法在提交前验证**，
+所以任何 `lib.rs` 改动都要在你本机跑这两条：
+
+```powershell
+cd desktop\src-tauri
+
+# ① 语法 + 类型 + 借用检查（不产出 exe，几十秒）
+cargo check
+
+# ② 有报错时看详细原因（可选）
+cargo check --message-format short
+```
+
+**本仓库已用静态契约测试替代不了这一步**（只校验「Rust 与 Python 的重依赖列表一致」等文本契约）。
+`cargo check` 通过后建议再 `cargo build` 一次确认能真编译。
+
 ---
 
 ## 1. 三样必须放进仓库的资源
@@ -134,7 +152,10 @@ Remove-Item -Recurse -Force "$env:LOCALAPPDATA\PaperMate"
 
 然后跑绿色版 `target\release\papermate-desktop.exe`，首启会：
 
-1. 展开捆绑的 Portable Python，用捆绑的 `uv.exe` 执行 `uv sync --extra rag --frozen`（**联网、数分钟级**）
+1. 展开捆绑的 Portable Python，用捆绑的 `uv.exe` 执行
+   `uv sync --extra rag --frozen --no-install-package torch --no-install-package FlagEmbedding
+   --no-install-package sentence-transformers`（**约 0.8GB**，联网、数分钟级）
+   —— PyTorch 等重依赖被**刻意排除**，等用户在设置页点「下载模型」时再补装
 2. 写 `%LOCALAPPDATA%\PaperMate\data\provider_settings.json`（`default_model=fake`）
 3. 写后端 `.env`（`PAPERMATE_DATA_DIR` / `HF_HOME` / `HF_ENDPOINT` 镜像）
 4. 拉起后端，打开 `http://127.0.0.1:8000/loading.html`，就绪后跳 `/`
