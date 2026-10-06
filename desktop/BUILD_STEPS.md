@@ -552,6 +552,8 @@ Test-Path "$env:LOCALAPPDATA\PaperMate\venv\Lib\site-packages\torch"
 | `uv sync failed: exit code: 2` ＋ `拒绝访问 (os error 5)` | 用户**全局** uv 缓存里有永久损坏条目（ACL/属主异常，`uv cache clean` 也删不掉） | 已改 App 私有 `UV_CACHE_DIR=<local_data>\uv-cache`。应急（**无需重编译**）：`$env:UV_CACHE_DIR="$env:LOCALAPPDATA\PaperMate\uv-cache"` 后跑现有 exe |
 | **窗口永远停在「正在启动」；后端日志 `No module named papermate`** | ★★★ venv 是**半成品**（`python.exe` 在、`site-packages` 空），而旧判据只看 `python.exe` 是否存在 ⇒ **永远跳过安装、且零报错** | 重编译（已修：能力探测 + `deps-ready` 指纹标记）。应急一键重置：删 `%LOCALAPPDATA%\PaperMate\deps-ready` **和** `venv` 目录后重启 |
 | 点过「准备运行环境」后 `torch` 又不见了 | ★★ 首启那段 `uv sync` 重跑了一次，**精确模式把"多余"包剪掉**（只在指纹变化时发生：换 lock / 换安装目录） | 已修：首启带 `--inexact`（绝不删除环境里已有的包）。诊断：`uv sync --dry-run` 若打印 ` - pkg==ver` 就是**会删** |
+| **换了构建方式（debug ↔ release）后"改了没生效"** | ★★ venv 固定在 `%LOCALAPPDATA%\PaperMate\venv`，**debug / release 共用同一份**；而 editable 的 `.pth` 仍指向**旧 profile** 的 `resources/backend/src`。uv 见 `papermate==0.1.0` **已满足就不再重装** ⇒ exe **静默 import 旧那份源码** | 删 `%LOCALAPPDATA%\PaperMate\venv`（最省事），或仅删 `_editable_impl_papermate.pth` + `papermate-0.1.0.dist-info`，再启动 |
+| **首装跑到一半关了窗口 / 装完了却没写 `deps-ready`** | 写标记的是 App 进程；窗口一关它就没了，uv 虽继续跑完但**没人写标记** ⇒ 下次启动还会重跑一遍 `uv sync` | 重启 App 让它自己补（缓存已热，很快）；或直接删 `deps-ready` 强制重走一遍 |
 
 ---
 
