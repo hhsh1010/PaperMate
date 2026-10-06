@@ -148,6 +148,21 @@ markers = [
 #   2. 定期清理存量 → `python scripts/clean_pytest_tmp.py`（默认 dry-run，分批删）；
 #   3. 想一次清完，在资源管理器里手动删 `garbage-*`（用户操作不受垫片约束，最省事）。
 
+# ★ 默认包索引改用清华镜像（2026-10-07）
+#   背景：本机直连 files.pythonhosted.org 实测 **83 KB/s**，装轻量集耗时 **≈50 分钟**；
+#        清华镜像同一文件 **15.0 MB/s（≈181×）**，且 **sha256 与 PyPI 逐字节一致**（已实测）。
+#   ⚠️ 关键：wheel 的**下载地址是写进 `uv.lock` 的**（不是运行时取自索引），
+#      所以只配索引**不会**改变下载地址 —— 必须**重新 lock** 才生效。
+#   ★ 为什么把镜像也声明在仓库里：否则将来任何一次 `uv lock` 都会翻回 pypi.org，
+#      把 2989 处 URL 又改回去 ⇒ 反复产生大规模 diff churn。
+#   ⚠️ 代价：把国内镜像固化进仓库 —— 境外用户会变慢（镜像全球可达，仍可用）。
+#      需要临时走官方源：`UV_DEFAULT_INDEX=https://pypi.org/simple uv lock`（会再次重写 lock）。
+#   ★ torch 不受影响：它走下面 explicit 的 pytorch 官方 cu126 源。
+[[tool.uv.index]]
+name = "tuna"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true
+
 # torch GPU 构建锁定：PyPI 的 Windows torch 恒为 CPU-only，GPU 轮子只在 pytorch 官方 cu126 源。
 # 用 explicit index + source 重定向，使 `uv sync` 自动从 cu126 源拉 GPU 构建，避免被换回 CPU 版。
 [[tool.uv.index]]
