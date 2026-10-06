@@ -285,12 +285,53 @@ npx tauri icon src-tauri/icons/logo-source.png
 
 ---
 
-## 第 6 步 · ★ `cargo check`（验证 `lib.rs` 的改动能编译）
+## 第 6 步 · 准备后端副本 + 构建前端（★ **必须在 `cargo check` 之前**）
 
-> ### 先跑 6.0：离线校验 `tauri.conf.json`（**不需要 Rust，秒级**）
+> ### ⚠️ 为什么这一步必须排在 `cargo check` 前面
 >
-> `tauri.conf.json` 唯一会被校验的时机是打包时（Rust 的 `tauri-build` 用 serde 解析），
-> 所以在没有 Rust 的环境里，配置错误会一路漏到出包才炸。本仓库提供了离线校验：
+> `tauri.conf.json` 的 `bundle.resources` 声明了 `resources/python` 与 `resources/backend`
+> 两个目录，而 **Tauri 的 build script 在 `cargo check` / `cargo build` 阶段就会校验它们是否存在**
+> （要嵌入资源清单），**不是**等到打包时。目录不存在时直接失败：
+>
+> ```
+> resource path `resources\python` doesn't exist
+> ```
+>
+> 这两个目录都由本脚本产出 ⇒ **没跑过本脚本就不能跑任何 cargo 命令**。
+> （2026-10-06 实测踩到：文档早期把 cargo check 排在本步之前，于是卡在这里。）
+
+```powershell
+cd <项目根>\desktop
+powershell -ExecutionPolicy Bypass -File scripts\build-resources.ps1
+```
+✅ 判据：末尾输出
+```
+[build-resources] done. backend copy at: ...\desktop\src-tauri\resources\backend
+```
+（末尾关于缺 `python.exe` / `uv.exe` 的**告警**若出现，说明第 3/4 步没做完 ——
+ 但目录会被创建，`cargo check` 可以先过；真正打包前必须补齐）
+
+### ✅ 产物自检（务必看一眼）
+
+```powershell
+Test-Path .\src-tauri\resources\python
+Test-Path .\src-tauri\resources\backend\pyproject.toml
+Test-Path .\src-tauri\resources\backend\src\papermate\models\db.py
+Test-Path .\src-tauri\resources\backend\web\dist\index.html
+Test-Path .\src-tauri\resources\backend\web\dist\loading.html
+```
+五条都应是 `True`。
+（第三条尤其重要 —— 历史上 `.gitignore` 的裸模式 `models/` 曾把整个源码包排除在 git 之外，
+导致打出来的包启动即 `ModuleNotFoundError`）
+
+---
+
+## 第 7 步 · ★ `cargo check`（验证 `lib.rs` 的改动能编译）
+
+> ### 先跑 7.0：离线校验 `tauri.conf.json`（**不需要 Rust，秒级**）
+>
+> `tauri.conf.json` 唯一会被校验的时机是 `tauri-build` 用 serde 解析它，而那需要 Rust 工具链，
+> 所以没有 Rust 时配置错误会一路漏到出包才炸。本仓库提供了离线校验：
 >
 > ```powershell
 > cd <项目根>
@@ -301,7 +342,7 @@ npx tauri icon src-tauri/icons/logo-source.png
 > ⚠️ 别小看这一步。实测踩到：`webviewInstallMode` 写成 `{"mode": "..."}`，
 > 而它其实是 **tagged enum**、键名必须是 `type` ⇒ serde 报
 > `missing field 'type'`（**文案说"缺字段"，真实原因是"键名写错"**，很有误导性）。
-> 同一轮还查出 `signCommand` 用了 `pwsh` (PowerShell 7)，而**多数机器没装 pwsh** ⇒
+> 同一轮还查出 `signCommand` 用了 `pwsh`，而多数机器没装 PowerShell 7 ⇒
 > `tauri build` 会在签名环节失败。这两个错都只需这一条命令就能提前发现。
 >
 > 官方 schema 已随仓库分发（`desktop/src-tauri/tauri.schema.json`，169KB），**完全离线**。
@@ -327,31 +368,6 @@ cargo check --message-format short
 ```powershell
 cd ..
 ```
-
----
-
-## 第 7 步 · 准备后端副本 + 构建前端
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\build-resources.ps1
-```
-✅ 判据：末尾输出
-```
-[build-resources] done. backend copy at: ...\desktop\src-tauri\resources\backend
-```
-（末尾关于缺 `python.exe` / `uv.exe` 的两条**告警**若出现，说明第 3/4 步没做完）
-
-### ✅ 产物自检（务必看一眼）
-
-```powershell
-Test-Path .\src-tauri\resources\backend\pyproject.toml
-Test-Path .\src-tauri\resources\backend\src\papermate\models\db.py
-Test-Path .\src-tauri\resources\backend\web\dist\index.html
-Test-Path .\src-tauri\resources\backend\web\dist\loading.html
-```
-四条都应是 `True`。
-（第二条尤其重要 —— 历史上 `.gitignore` 的裸模式 `models/` 曾把整个源码包排除在 git 之外，
-导致打出来的包启动即 `ModuleNotFoundError`）
 
 ---
 
@@ -443,6 +459,7 @@ Test-Path "$env:LOCALAPPDATA\PaperMate\venv\Lib\site-packages\torch"
 | `python.exe -c "import site"` 失败 | `python312._pth` 未放开 `import site` | 回第 3.1 步 |
 | `uv sync` 报 site-packages 相关错 | 同上 | 回第 3.1 步 |
 | `icon.ico not found` | 未跑 `npx tauri icon` | 回第 5 步 |
+| **`resource path \`resources\python\` doesn't exist`** | ★ 未先跑 `build-resources.ps1`。Tauri 的 build script 在 `cargo check`/`build` **阶段**就校验 `bundle.resources` 的目录是否存在 | 先跑第 6 步，再 cargo |
 | `ModuleNotFoundError: papermate.models` | 打包源缺 `src/papermate/models/` | 检查 `.gitignore` 是否用了裸 `models/`（应锚定为 `/models/`） |
 | `resource path not found`（Windows 上找不到 bundled python） | 用 `cargo build`/`tauri dev` 而非 `tauri build` 跑 | 正式出包用 `tauri build`；`resources` 在 target/release 下才完整 |
 | 窗口白屏 | 后端未就绪 | 看 `%LOCALAPPDATA%\PaperMate\data\logs\app.log`；`loading.html` 会自动跳转 |
