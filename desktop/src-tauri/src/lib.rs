@@ -82,6 +82,21 @@ fn bootstrap_and_spawn(app: &tauri::AppHandle) {
     let data_dir = local_data.join("data");
     let hf_home = local_data.join("huggingface");
     let venv_dir = local_data.join("venv");
+    // ★ App 专属 uv 分发缓存（与 venv / huggingface 并列在 App 数据目录下）。
+    //   2026-10-06 实测事故：共用用户全局 uv 缓存时，首启因一个**损坏的缓存条目**失败：
+    //     Failed to write to the distribution cache / failed to open file
+    //     ...\uv\cache\sdists-v9\...\jieba-0.42.1-py3-none-any.whl: 拒绝访问 (os error 5)
+    //   该 .whl 连 `uv cache clean` 都删不掉、`icacls` 读不到 ACL（属主/ACL 异常），
+    //   而同目录其它文件可正常删除 ⇒ 全局缓存里有**永久损坏的条目**。
+    //   指向 App 私有目录后，启动不再依赖用户机器上的历史残留。
+    //   ⚠️ 后端 `rag_deps.uv_cache_dir()` 用同一约定（<local_data>/uv-cache），两处必须一致。
+    //   ★ 若外部已显式设置 UV_CACHE_DIR，则**尊重它**（与 HF_ENDPOINT 的处理一致）——
+    //     既保留"排查时可临时指到别处"的逃生口，也让默认值保持确定性。
+    let uv_cache_dir = std::env::var("UV_CACHE_DIR")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| local_data.join("uv-cache"));
     let venv_python = venv_dir.join("Scripts").join("python.exe");
 
     if let Err(e) = fs::create_dir_all(&data_dir) {
@@ -156,6 +171,8 @@ fn bootstrap_and_spawn(app: &tauri::AppHandle) {
             //   首启失败 = 应用起不来 ⇒ 这里放宽（与后端 sync_heavy_deps 保持一致）。
             .env("UV_HTTP_TIMEOUT", "600")
             .env("UV_HTTP_LOW_SPEED_LIMIT", "10")
+            // ★ 避开用户全局 uv 缓存（可能含损坏条目，见上面 uv_cache_dir 的说明）
+            .env("UV_CACHE_DIR", &uv_cache_dir)
             .args(uv_args)
             .status()
         {

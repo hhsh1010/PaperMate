@@ -195,6 +195,33 @@ def venv_dir() -> Path | None:
     return cand if cand.exists() else None
 
 
+def uv_cache_dir() -> Path | None:
+    """本应用专属的 **uv 分发缓存**目录（``<local_data>/uv-cache``）。
+
+    ★★ 为什么必须给 App 自己一个缓存目录（2026-10-06 实测事故）：
+      首次真机启动时 `uv sync` 失败：
+        ``Failed to write to the distribution cache`` /
+        ``failed to open file ...\\uv\\cache\\sdists-v9\\...\\jieba-0.42.1-py3-none-any.whl:
+          拒绝访问 (os error 5)``
+      定位结果：那个 `.whl`（9月5日生成）**连 `uv cache clean jieba` 都删不掉**，
+      `icacls` 也读不到它的 ACL —— 属主/ACL 异常（疑似早期在受限上下文里写出的文件），
+      而**同目录其它文件都能正常删除**。⇒ 用户全局 uv 缓存里存在**永久损坏的条目**。
+
+      若 App 继续共用全局缓存，就等于把"能否启动"押在用户机器上任一历史残留之上 ——
+      不可接受。指向 App 私有目录后：① 不再受全局缓存污染影响；
+      ② 与已有的 `venv` / `huggingface` 布局一致（都在 `<local_data>` 下），便于整体清理。
+
+    返回 ``None`` 表示解析不出（与 :func:`venv_dir` 同一套降级逻辑）。
+    """
+    try:
+        from ..config import get_settings
+
+        data_dir = Path(get_settings().resolved_data_dir)
+    except Exception:  # noqa: BLE001
+        return None
+    return data_dir.parent / "uv-cache"
+
+
 def python_exe_for_venv(venv: Path) -> Path:
     """venv 内的解释器路径（Windows / POSIX 都覆盖）。"""
     return venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
@@ -268,6 +295,11 @@ def sync_heavy_deps(
         "UV_HTTP_TIMEOUT": "600",         # 单个 wheel 较大，默认 30s 会超时
         "UV_HTTP_LOW_SPEED_LIMIT": "10",
     }
+    # ★ 用 App 私有 uv 缓存，避免被用户全局缓存里的损坏条目挡住（见 uv_cache_dir 的说明）
+    #   ★ 外部已显式设置则尊重它（与上面 HF_ENDPOINT 的处理一致，保留排查时的逃生口）
+    cache = uv_cache_dir()
+    if cache is not None:
+        env["UV_CACHE_DIR"] = os.environ.get("UV_CACHE_DIR", "").strip() or str(cache)
     logger.info("开始补装重依赖：%s", " ".join(args))
     try:
         proc = subprocess.run(  # noqa: S603  参数全为本地绝对路径，无 shell
