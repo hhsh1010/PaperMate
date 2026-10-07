@@ -556,6 +556,10 @@ Test-Path "$env:LOCALAPPDATA\PaperMate\venv\Lib\site-packages\torch"
 | **首装跑到一半关了窗口 / 装完了却没写 `deps-ready`** | 写标记的是 App 进程；窗口一关它就没了，uv 虽继续跑完但**没人写标记** ⇒ 下次启动还会重跑一遍 `uv sync` | 重启 App 让它自己补（缓存已热，很快）；或直接删 `deps-ready` 强制重走一遍 |
 | **窗口停在"无法访问此页面"（连接被拒），或一直转圈不跳转** | ★★ 窗口的**首个页面不能取自后端** —— Tauri 的顺序是「先按配置建窗口 → 再跑 `setup` 里的起后端」⇒ 窗口第一帧必然早于后端。旧配置把 `windows[0].url` 指向 `http://127.0.0.1:8000/loading.html`，于是后端慢/挂时窗口停在 WebView2 错误页且**永不自愈**（10-07 已改为**包内本地**等待页 + Rust 就绪后 `eval` 导航） | 确认 `tauri.conf.json` 的 `windows[0].url` 是 **`"loading.html"`**（不是 http 地址），且 `frontend-dist/loading.html` 存在。改完需**重编译**才生效 |
 | 首启失败但窗口只说"正在启动"、看不到原因 | 旧版错误只打 stdout/stderr，双击启动时**根本没有控制台** | 10-07 起失败原因会由 `show_startup_error()` 直接写进窗口（含"下次启动会自动重试"与可操作的路径） |
+| **首次启动弹出「请选择数据存放位置」窗口** | ★ 2026-10-07 新增的**预期行为**（不是故障）。判据是 `%LOCALAPPDATA%\PaperMate\app-settings.json` **不存在** ⇒ **老用户升级后的首次也会弹一次** | 直接选默认位置即可（对话框已默认定位到它）。选别的位置会**新建一个空数据目录**：旧数据不会被删除，但应用不再使用它 |
+| 弹出的位置被拒（"不能使用网络位置 / 不可写 / 至少需要 8 GB"） | 首启位置校验有 7 条规则（见 `docs/首启选择存储位置-设计与方案-2026-10-07.md`）；最多重试 3 次，之后自动改用默认位置 | 换一个**本机磁盘**上的目录。★ 校验是**真写探针文件**，不是权限位判断（Windows 上 `os.access` 是假信号） |
+| 换过数据位置后「准备运行环境 / 下载模型」报"未找到应用私有 venv" | ★ 后端 `rag_deps` 需要 `PAPERMATE_VENV_DIR` 才知道 venv 在哪；没注入时会退回用 `data_dir.parent` 推导，从而指向错误目录 | 确认启动环境里 `PAPERMATE_VENV_DIR` = `<root>\venv`；若被外部变量顶掉，先清掉 `UV_PROJECT_ENVIRONMENT` |
+| 想强制重新选择存储位置 | `app-settings.json` 就是「已问过」的标记 | 删掉 `%LOCALAPPDATA%\PaperMate\app-settings.json` 后重启即可（**不会**删除任何数据）；选默认位置即可回到原状 |
 
 ---
 
