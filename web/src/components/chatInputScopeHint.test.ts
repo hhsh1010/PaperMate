@@ -114,6 +114,30 @@ describe("输入框 · 当前检索范围提示", () => {
     expect(html).toContain("不会检索论文内容");
   });
 
+  it("★ 范围提示带关闭按钮（2026-10-07 新增），且按钮在该横幅内部", () => {
+    // 接线守护：关闭按钮复用 `.composer-warn-close`，必须渲染在 scopeHint 横幅**内部**。
+    // ⚠️ 断言必须圈定在「本横幅段」内：warns 横幅也有同名 close 按钮且渲染在其后，
+    // 若只用 indexOf(bannerIdx) 向后找，会**误匹配 warns 的按钮** ——
+    // 这是本次反向自检（删按钮 → 测试仍绿）实测抓出的断言漏洞，故以下用段内匹配。
+    const html = renderHint({ mentioned: [] });
+    const bannerIdx = html.indexOf('data-tone="multi"');
+    expect(bannerIdx).toBeGreaterThan(-1);
+    // scopeHint div 的闭合：下一个 role="status"（warns 横幅开头）之前；没有 warns 则到末尾
+    const nextBanner = html.indexOf('role="status"', bannerIdx);
+    const segment = html.slice(bannerIdx, nextBanner === -1 ? undefined : nextBanner);
+    expect(segment).toContain("composer-warn-close");
+    expect(segment).toContain('aria-label="关闭此提示"');
+  });
+
+  it("通用对话（general tone）的提示同样带关闭按钮", () => {
+    const html = renderHint({ scope: SCOPE_EMPTY });
+    const bannerIdx = html.indexOf('data-tone="general"');
+    expect(bannerIdx).toBeGreaterThan(-1);
+    const nextBanner = html.indexOf('role="status"', bannerIdx);
+    const segment = html.slice(bannerIdx, nextBanner === -1 ? undefined : nextBanner);
+    expect(segment).toContain("composer-warn-close");
+  });
+
   it("scope 未加载（null）→ 不渲染任何范围提示", () => {
     // 「宁可不显示，也不显示错的状态」：取数失败时不得瞎猜一个场景贴上去。
     const html = renderHint({ scope: null });

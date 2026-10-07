@@ -335,6 +335,11 @@ impl AppSettings {
     }
 
     fn write(&self, local_data: &Path) -> std::io::Result<()> {
+        // ★ 必须先把设置目录建出来：`local_data_dir()` 只**算路径**、不保证目录存在，
+        //   首启时 `<local_data>/PaperMate` 子目录尚不存在 ⇒ 不建就 `fs::write` 失败、
+        //   `app-settings.json` 永不被创建 ⇒ 下次启动 `resolve_data_root` 仍判"首次"，
+        //   于是每次开都要重新选存储位置（用户实测现象）。
+        fs::create_dir_all(local_data)?;
         let body = serde_json::to_string_pretty(self)
             .unwrap_or_else(|_| r#"{"schema":1}"#.to_string());
         let dst = local_data.join(APP_SETTINGS);

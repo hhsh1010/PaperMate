@@ -7,6 +7,8 @@ import type { SessionOut, WorkspaceMode, WorkspaceOut } from "./lib/types";
 import { isWorkspace } from "./lib/types";
 import { Icons, type IconProps } from "./lib/icons";
 import { toErrorMessage } from "./lib/error";
+import { isTauri } from "./lib/titlebar";
+import TitleBar from "./components/TitleBar";
 
 /**
  * T-08（2026-09-29）：**路由级按需加载** —— 除默认落地页（chat）外，其余 6 个视图
@@ -623,7 +625,8 @@ export function App() {
 
   return (
     <SettingsProvider>
-    <div className={`app ${isFullscreen ? "fullscreen" : ""}`}>
+    <div className={`app ${isFullscreen ? "fullscreen" : ""} ${isTauri() ? "tauri-frameless" : ""}`}>
+      <TitleBar />
       {!isFullscreen && (
         <>
       {/* 移动端顶栏 */}

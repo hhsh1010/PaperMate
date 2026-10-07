@@ -204,13 +204,25 @@ def check_free_space(needed_gb: float, *, dirpath: str | None = None, usage=None
     """磁盘余量检查：不足抛 `ModelInstallError`；返回可用 GB（便于提示）。
 
     `usage` 可注入（`shutil.disk_usage` 同签名），便于单元测试构造"磁盘不足"。
+
+    ★★ 2026-10-07 首装修复（与 `free_space_gb` 同源）：
+      旧实现 `probe = target if os.path.isdir(target) else dirname` 在**首装**会误杀下载：
+      `ensure_hf_mirror()` / huggingface_hub 初始化会在本函数之前先把 HF 缓存目录建出来
+      （`isdir` 为真、probe 取完整路径），而 Windows 对新创建的目录调
+      `shutil.disk_usage`（`GetDiskFreeSpaceExW`）会抛 `FileNotFoundError`
+      —— 整个下载被"探测异常"中止，状态变 `error`、UI 卡在"准备运行环境/下载失败"。
+      修复：① 复用 `_existing_ancestor(target)` 跳到最近**已存在**祖先再探测（与展示口径一致）；
+      ② 探测本身失败**不再抛错中止**，仅记 warning 并放行
+      （测不出余量 ≠ 余量不足，不该拦下载），与 `free_space_gb` 的"探测失败不挂卡片"同源。
+      仅"成功测得且确实不足"才抛 `ModelInstallError`。
     """
     target = dirpath or cache_dir()
-    probe = target if os.path.isdir(target) else (os.path.dirname(target) or ".")
+    probe = _existing_ancestor(target)          # ★ 同源 free_space_gb：跳到最近已存在祖先
     try:
         du = (usage or shutil.disk_usage)(probe)
-    except Exception as e:  # noqa: BLE001  路径不存在/无权限 → 显式失败而非继续下载
-        raise ModelInstallError(f"无法探测磁盘余量（{probe}）：{type(e).__name__}") from e
+    except Exception as e:                       # noqa: BLE001  探测失败 ⇒ 放行，不拦下载
+        logger.warning("磁盘余量探测失败（%s）：%s，跳过本拦截", probe, e)
+        return 0.0                               # 不可测 ⇒ 放行（调用方未使用返回值做展示）
     free_gb = du.free / GB
     need = needed_gb * _DISK_SAFETY
     if free_gb < need:
