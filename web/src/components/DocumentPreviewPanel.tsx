@@ -728,7 +728,7 @@ export function DocumentPreviewPanel({
               disabled={!active || exporting}
               onClick={exportMarkdown}
             >
-              <Icons.download size={13} /> {exporting ? "导出中…" : "导出 Markdown + 引用"}
+              <Icons.download size={13} /> {exporting ? "导出中…" : "导出 Markdown"}
             </button>
           </div>
         </>

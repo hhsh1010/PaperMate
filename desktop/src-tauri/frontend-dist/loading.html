@@ -62,9 +62,31 @@
       }
       #panel .danger b { color: #ffb0b0; }
       #panel b { color: #dfe5f0; }
+      /* frameless 窗口（decorations:false）下需要自带顶条：拖拽 + 关闭 */
+      .tb {
+        position: fixed; top: 0; left: 0; right: 0; height: 32px;
+        display: flex; align-items: stretch; justify-content: space-between;
+        background: #0f1115; color: #8b93a3;
+        -webkit-user-select: none; user-select: none; z-index: 10;
+      }
+      .tb-drag {
+        flex: 1; min-width: 0; display: flex; align-items: center;
+        padding-left: 12px; font-size: 12px; letter-spacing: 0.3px; color: #8b93a3;
+      }
+      .tb-x {
+        width: 44px; border: 0; background: transparent; color: #cdd3df;
+        cursor: pointer; font-size: 15px; line-height: 1;
+      }
+      .tb-x:hover { background: #e0483d; color: #fff; }
+      /* 让首启内容整体下沉 32px，避免被固定顶条压住 */
+      .box { padding-top: 32px; }
     </style>
   </head>
   <body>
+    <div class="tb">
+      <div class="tb-drag" data-tauri-drag-region>PaperMate</div>
+      <button class="tb-x" id="tb-close" type="button" title="关闭" aria-label="关闭">×</button>
+    </div>
     <div class="box">
       <div id="spin" class="spin"></div>
       <div id="msg">正在启动本地服务…</div>
@@ -178,6 +200,16 @@
           el("spin").style.display = "";
           el("hint").textContent = "数据位置：" + root;
         };
+
+        // ★ frameless 窗口（decorations:false）自带顶条：拖拽区由 tauri 的 drag.js 处理，
+        //   这里只给「关闭」按钮接上真正的窗口 API。直接走核心 IPC（plugin:window|close），
+        //   不依赖 @tauri-apps/api 命名空间（远程源下就绪时序更脆）。
+        var tbClose = el("tb-close");
+        if (tbClose && window.__TAURI_INTERNALS__) {
+          tbClose.addEventListener("click", function () {
+            try { window.__TAURI_INTERNALS__.invoke("plugin:window|close"); } catch (e) {}
+          });
+        }
 
         tick();
       })();

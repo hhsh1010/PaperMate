@@ -4,6 +4,12 @@ import { Icons } from "../lib/icons";
 import { composerWarns } from "../lib/networkWarn";
 import type { DocScopeOut, InventoryOut, NetworkCapabilityOut, PromptEnhanceResult, ProviderBalance } from "../lib/types";
 import { docScopeHint } from "../lib/docScope";
+import {
+  isKeyVisible,
+  loadDismissedKeys,
+  pushDismissedKey,
+  saveDismissedKeys,
+} from "../lib/dismissedKeys";
 import { filterSkills } from "../lib/skillFilter";
 import { CtxUsageBar } from "./CtxUsagePanel";
 import { PromptWizard } from "./PromptWizard";
@@ -19,7 +25,7 @@ const CATEGORY_COLOR: Record<string, string> = {
 
 // 学科视角选项（与后端 disciplines registry / 设置页对齐；新增学科在此追加一行）
 const DISCIPLINES: { value: string; label: string }[] = [
-  { value: "general", label: "通用（CS/ML）" },
+  { value: "general", label: "通用" },
   { value: "auto", label: "自动（按内容推测）" },
   { value: "clinical", label: "医学/临床" },
   { value: "law", label: "法学" },
@@ -67,8 +73,8 @@ export function ChatInput({
   models,
   currentModel,
   onModelChange,
-  modelSource,
-  balances,
+  // modelSource / balances 不再解构渲染（2026-10-07 工具条瘦身，见底部注释），
+  // 但 props 类型保留，调用方（ChatPage）无需改动。
   webOn,
   onWebToggle,
   webCapability,
@@ -179,24 +185,33 @@ export function ChatInput({
    * 看久了很吵。但它们是**安全提示**，不能让用户一关就永久静音 —— 所以关闭按**指纹**记忆：
    * `会话 + 提示类型 + 文案` 任一变化（换模型 / 换风险类型 / 换会话）→ 指纹变化 → 提示**自动重新出现**。
    * 存 sessionStorage（关掉标签页即重置），只保留最近 20 条避免无限累积。
+   * （2026-10-07：存取/追加逻辑抽到 `lib/dismissedKeys`，与检索范围提示的关闭记忆共用同一实现。）
    */
-  const [dismissedWarns, setDismissedWarns] = useState<string[]>(() => {
-    try {
-      const raw = sessionStorage.getItem("pm.dismissedWarns");
-      const parsed = raw ? JSON.parse(raw) : [];
-      return Array.isArray(parsed) ? parsed.filter((x) => typeof x === "string") : [];
-    } catch {
-      return [];
-    }
-  });
+  const [dismissedWarns, setDismissedWarns] = useState<string[]>(() =>
+    loadDismissedKeys("pm.dismissedWarns"),
+  );
   const dismissWarn = (key: string) => {
     setDismissedWarns((prev) => {
-      const next = [...prev.filter((k) => k !== key), key].slice(-20);
-      try {
-        sessionStorage.setItem("pm.dismissedWarns", JSON.stringify(next));
-      } catch {
-        // 隐私模式等写入失败：仅内存生效，不影响功能
-      }
+      const next = pushDismissedKey(prev, key);
+      saveDismissedKeys("pm.dismissedWarns", next);
+      return next;
+    });
+  };
+
+  /**
+   * 检索范围提示可关闭（2026-10-07）：「检索全部 N 篇文档：…」是**状态说明**，常驻会占一整行，
+   * 用户看完即可关掉。关闭按 scopeHint 的内容 key 记忆 —— 范围一变（增删文档 / `@` 聚焦 /
+   * 换会话）key 随之变化 ⇒ 提示自动重新出现，与 warns 的指纹记忆同一语义。
+   * 语义差异提醒：warns 是"安全提示"（换模型就回来），这里是"状态说明"（范围变了才回来），
+   * 共用的是**机制**（key 指纹 + sessionStorage + 截断 20 条），不是业务含义。
+   */
+  const [dismissedScopeHints, setDismissedScopeHints] = useState<string[]>(() =>
+    loadDismissedKeys("pm.dismissedScopeHints"),
+  );
+  const dismissScopeHint = (key: string) => {
+    setDismissedScopeHints((prev) => {
+      const next = pushDismissedKey(prev, key);
+      saveDismissedKeys("pm.dismissedScopeHints", next);
       return next;
     });
   };
@@ -206,7 +221,10 @@ export function ChatInput({
    * 用的是**乐观更新**的 `webOn` 配**上一次请求**的 `webCapability.available`，
    * 点开关那一刻两者必然短暂矛盾 → 提示闪现约 50ms 后消失（帧级实测）。
    * 纯函数 + 请求指纹把这条时序约束钉住，并有 vitest 守护。 */
-  const scopeHint = docScopeHint(docScope ?? null, mentionedDocIds);
+  const scopeHintRaw = docScopeHint(docScope ?? null, mentionedDocIds);
+  // 可关闭（2026-10-07）：被关掉的 key 不再渲染；范围一变 key 变 ⇒ 自动重新出现
+  const scopeHint =
+    scopeHintRaw && isKeyVisible(dismissedScopeHints, scopeHintRaw.key) ? scopeHintRaw : null;
 
   const warns = composerWarns({
     sessionId: sessionId ?? null,
@@ -651,6 +669,17 @@ export function ChatInput({
         <div className="composer-warn" role="status" data-tone={scopeHint.tone} key={scopeHint.key}>
           <Icons.docs size={13} />
           <span>{scopeHint.text}</span>
+          {/* 可关闭（2026-10-07）：与 warns 同一套 `.composer-warn-close`（零新 CSS）；
+              关闭按内容 key 记忆，范围变化后自动重现（见 dismissScopeHint 注释）。 */}
+          <button
+            type="button"
+            className="composer-warn-close"
+            onClick={() => dismissScopeHint(scopeHint.key)}
+            aria-label="关闭此提示"
+            title="关闭此提示"
+          >
+            <Icons.x size={12} />
+          </button>
         </div>
       )}
 
@@ -718,7 +747,8 @@ export function ChatInput({
                 >
                   <Icons.zap size={14} />
                   <span>命令</span>
-                  <span className="skill-bar-count">{skills.length}</span>
+                  {/* 2026-10-07：工具条按钮去计数徽标（用户反馈：与「提问模板」保持同等干净）；
+                      数量仍可在展开面板头部查看（skill-panel-count 保留）。 */}
                   <span className="composer-tool-chevron" aria-hidden="true">
                     {skillsOpen ? <Icons.chevronDown size={12} /> : <Icons.chevronRight size={12} />}
                   </span>
@@ -895,7 +925,7 @@ export function ChatInput({
             >
               <Icons.layers size={14} />
               <span className="composer-model-label">
-                {DISCIPLINES.find((d) => d.value === (discipline ?? "general"))?.label ?? "通用（CS/ML）"}
+                {DISCIPLINES.find((d) => d.value === (discipline ?? "general"))?.label ?? "通用"}
               </span>
               <span className={`composer-model-chevron ${discOpen ? "open" : ""}`} aria-hidden="true">
                 <Icons.chevronDown size={12} />
@@ -938,7 +968,7 @@ export function ChatInput({
               title="切换当前会话使用的模型"
             >
               <Icons.cpu size={14} />
-              <span className="composer-model-label">{currentModel ?? "fake"}</span>
+              <span className="composer-model-label model-fixed">{currentModel ?? "fake"}</span>
               <span className={`composer-model-chevron ${modelOpen ? "open" : ""}`} aria-hidden="true">
                 <Icons.chevronDown size={12} />
               </span>
@@ -964,34 +994,8 @@ export function ChatInput({
               </div>
             )}
           </div>
-          {/* F4：标注当前模型是「本会话指定」还是「继承全局默认」，消除三处选择的来源困惑 */}
-          {modelSource && (
-            <span
-              className={`model-source ${modelSource}`}
-              title={
-                modelSource === "session"
-                  ? "本会话已单独指定模型，优先级高于设置页的「默认模型」"
-                  : "当前继承设置页的「默认模型」；在本会话内切换一次即变为「会话覆盖」"
-              }
-            >
-              {modelSource === "session" ? "会话覆盖" : "全局默认"}
-            </span>
-          )}
-
-          {balances && (
-            <span className="composer-balance" title="账户余额（模型选择参考）">
-              {Object.entries(balances)
-                .filter(([, b]) => b.available)
-                .map(([p, b]) => (
-                  <em key={p} className="bal-chip">
-                    {p}: {b.total_balance ?? 0} {b.currency ?? ""}
-                  </em>
-                ))}
-              {Object.entries(balances).filter(([, b]) => b.available).length === 0 && (
-                <em className="bal-chip off">余额不可查/未配置</em>
-              )}
-            </span>
-          )}
+          {/* F4 徽标与余额条已下线（2026-10-07 用户反馈：压缩工具条横向空间，保证一排放下）。
+              props（modelSource / balances）保留以兼容调用方，但不再渲染。 */}
         </div>
       </div>
     </div>

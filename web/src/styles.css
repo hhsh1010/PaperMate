@@ -360,6 +360,54 @@ input, select, textarea { font-family: inherit; }
 .app.fullscreen { display: block; height: 100dvh; overflow: hidden; }
 .app.fullscreen > .login-page { height: 100%; }
 
+/* ============================ 桌面端独立顶条（A1 · frameless 窗口） ============================ */
+/* ★ 2026-10-07：无边框窗口（decorations:false）下，原生 最小化/最大化/关闭 栏消失，
+   需要一个与页面同色、无边框的「融入式」顶条。整条取 --bg ⇒ 视觉上不出现突兀功能栏。 */
+.titlebar {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 36px;
+  z-index: 60;
+  display: flex;
+  align-items: stretch;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-user-select: none;
+  user-select: none;
+}
+/* 拖拽区：占满左侧剩余空间。data-tauri-drag-region 由 tauri 注入的 drag.js 处理
+   拖拽 + 双击最大化；按钮放在拖拽区之外，单击不会被误判为拖拽。 */
+.titlebar-drag {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  font-size: 12.5px;
+  color: var(--muted);
+  cursor: default;
+}
+.titlebar-brand { font-weight: 600; letter-spacing: 0.2px; color: var(--text-strong); }
+/* 右侧窗口控制：默认幽灵（透明），hover 整条或自身才显形，避免喧宾夺主 */
+.titlebar-actions { display: flex; align-items: stretch; }
+/* ★ 常驻可见（用户要求）：不再 hover 才显形；保留 hover 底色反馈 */
+.tb-btn {
+  width: 46px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  opacity: 1;
+  transition: background 120ms ease;
+}
+.tb-btn:hover { background: var(--surface-2); }
+.tb-close:hover { background: #e0483d; color: #fff; }
+/* frameless 窗口：给内容让出 36px 顶边（TitleBar 为 fixed，不占 flex 流） */
+.app.tauri-frameless { padding-top: 36px; }
+
 /* ============================ 左侧栏 ============================ */
 .sidebar {
   width: 280px;
@@ -3759,9 +3807,15 @@ input, select, textarea { font-family: inherit; }
 .preview-empty p { margin: 0; font-size: 13.5px; color: var(--text); }
 .export-btn-group { display: flex; gap: 8px; }
 .export-btn {
-  flex: 1; border-radius: var(--radius-full); padding: 10px 0; font-size: 13px; font-weight: 600;
-  cursor: pointer; transition: background 0.15s;
+  /* ★ 2026-10-07 对齐修复：改为 flex 居中 + 统一 min-height。
+     旧实现 padding:10px 0 + 默认 inline 流，叠加全局 `.app button > svg { display:block }`(:5257)
+     ⇒ 导出按钮的下载图标独占一行（飘左上）、文字掉到第二行，按钮被撑高，
+     与纯文字的「＋ 添加文档」不等高、不居中。flex 化后图标回行内、两键同高（同行内 stretch 兜底）。 */
+  flex: 1; border-radius: var(--radius-full); min-height: 38px; padding: 0 14px;
+  font-size: 13px; font-weight: 600; cursor: pointer; transition: background 0.15s;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
 }
+.export-btn > svg { flex: 0 0 auto; }
 .export-btn.ghost { background: var(--surface); border: 1px solid var(--accent); color: var(--accent); }
 .export-btn.ghost:hover { background: var(--accent-soft); }
 .export-btn.primary { background: var(--accent); border: 1px solid transparent; color: var(--on-accent); }
@@ -5805,6 +5859,9 @@ input, select, textarea { font-family: inherit; }
   display: flex;
   align-items: center;
   gap: 6px;
+  /* 2026-10-07：按钮在整行**平均分布**（用户反馈），窗口变窄时 flex-wrap 自动换行自适应；
+     换行后每行内部仍按 space-between 分布（gap 6px 是最小间距下限）。 */
+  justify-content: space-between;
   flex-wrap: wrap;
 }
 .composer-actions {
@@ -6144,6 +6201,10 @@ input, select, textarea { font-family: inherit; }
   cursor: not-allowed;
 }
 .composer-model-label { max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+/* 2026-10-07：模型选择框定宽（用户反馈"不要太长"）——固定 104px + 省略号，
+   长模型名（deepseek-v4-flash-vision-exp）截断，短名不撑宽 ⇒ 工具条宽度可预期、一排放下。
+   学科下拉（同样用 composer-model-label）不加此类，"通用"等短文案自然宽度。 */
+.composer-model-label.model-fixed { width: 104px; flex: 0 0 auto; text-align: left; }
 .composer-model-chevron {
   display: inline-flex;
   color: var(--muted);
