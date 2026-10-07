@@ -8,7 +8,14 @@ import type {
   RagInstallStatus,
   RagModelsOut,
   SessionOut,
+  StorageOut,
 } from "../lib/types";
+import {
+  buildStorageUpdateInput,
+  formatSize,
+  STORAGE_SUBDIR_LABELS,
+  storagePendingBanner,
+} from "../lib/storageLoc";
 import { useLang } from "../lib/i18n";
 import { MemoryPanel } from "../components/MemoryPanel";
 import { SectionCard } from "../components/SectionCard";
@@ -125,6 +132,13 @@ export function SettingsPage() {
   const [balances, setBalances] = useState<Record<string, ProviderBalance> | null>(null);
   const [inventory, setInventory] = useState<InventoryOut | null>(null);
   const [invError, setInvError] = useState<string | null>(null);
+  // ── 存储位置（2026-10-07）──
+  const [storage, setStorage] = useState<StorageOut | null>(null);
+  const [storageErr, setStorageErr] = useState<string | null>(null);
+  const [storageMsg, setStorageMsg] = useState<string | null>(null);
+  const [storageRoot, setStorageRoot] = useState("");
+  const [storageMigrate, setStorageMigrate] = useState(true);
+  const [storageSaving, setStorageSaving] = useState(false);
 
   // ---- 真实语义检索模型的**显式安装**（2026-10-05 桌面客户端）----
   // 语义：App 装完默认 fake（零下载）⇒ 用户在此**主动**下载 ⇒ 下载完仍需手动把
@@ -274,6 +288,38 @@ export function SettingsPage() {
     }
   };
 
+  /** ★ 存储位置：只**读**当前位置；改位置走下面的保存按钮（写"待迁移请求"）。 */
+  const refreshStorage = async () => {
+    try {
+      const s = await api.getStorage();
+      setStorage(s);
+      setStorageRoot((prev) => prev || s.data_root);
+      setStorageErr(null);
+    } catch (e: unknown) {
+      setStorageErr(toErrorMessage(e) || "加载失败");
+    }
+  };
+
+  const saveStorage = async () => {
+    const built = buildStorageUpdateInput(storageRoot, storageMigrate);
+    if (!built.ok || !built.value) {
+      setStorageErr(built.error ?? "路径无效");
+      return;
+    }
+    setStorageSaving(true);
+    setStorageMsg(null);
+    try {
+      const r = await api.updateStorage(built.value);
+      setStorageErr(null);
+      setStorageMsg(r.warnings.join("\n"));
+      await refreshStorage();
+    } catch (e: unknown) {
+      setStorageErr(toErrorMessage(e) || "保存失败");
+    } finally {
+      setStorageSaving(false);
+    }
+  };
+
   const refreshRagModels = async () => {
     try {
       const [m, s] = await Promise.all([api.getRagModels(), api.ragInstallStatus()]);
@@ -328,6 +374,7 @@ export function SettingsPage() {
     refreshSessions();
     refreshBalances();
     refreshInventory();
+    refreshStorage();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // L6 修复（2026-09-10）：**去掉 settings 依赖**——原依赖链使保存全局设置后（store 更新）
@@ -930,6 +977,84 @@ export function SettingsPage() {
               <code className="path-code">{settings?.data_dir ?? "…"}</code>
               <span className="settings-hint">{t("settings.path.hint")}</span>
             </label>
+
+            {/* ── 存储位置：改位置 + 迁移（2026-10-07）──
+                ★ 这里只**写待迁移请求**，真正搬迁由桌面启动器在重启时、
+                  **后端启动之前**执行（那时 SQLite 未打开，不会拷到一半）。 */}
+            <div className="inventory-block">
+              <span className="settings-label">{lang === "zh" ? "存储位置（数据根目录）" : "Storage (data root)"}</span>
+              {storageErr && <div className="error-box">{storageErr}</div>}
+              {storageMsg && (
+                <div className="settings-hint" style={{ whiteSpace: "pre-wrap" }}>{storageMsg}</div>
+              )}
+              {storage && !storage.available && (
+                <div className="settings-hint">{storage.unavailable_reason}</div>
+              )}
+              {storage?.available && (
+                <>
+                  <label className="settings-field">
+                    <span className="settings-label">{lang === "zh" ? "当前位置" : "Current"}</span>
+                    <code className="path-code">{storage.data_root}</code>
+                  </label>
+                  {storage.drives.length > 0 && (
+                    <div className="settings-hint">
+                      {lang === "zh" ? "本机磁盘：" : "Drives: "}
+                      {storage.drives
+                        .map((d) => `${d.root} ${d.free_gb.toFixed(0)}GB${d.kind === "REMOTE" ? (lang === "zh" ? "（网络盘，不建议）" : " (remote)") : ""}`)
+                        .join("    ")}
+                    </div>
+                  )}
+                  {Object.entries(STORAGE_SUBDIR_LABELS).map(([key, meta]) => (
+                    <label className="settings-field" key={key}>
+                      <span className="settings-label">{lang === "zh" ? meta.zh : meta.en}</span>
+                      <code className="path-code">{storage.dirs[key] ?? "—"}</code>
+                      <span className="settings-hint">
+                        {meta.hint}
+                        {storage.sizes_mb[key]
+                          ? `　·　${formatSize(storage.sizes_mb[key].mb, storage.sizes_mb[key].truncated, lang)}`
+                          : ""}
+                      </span>
+                    </label>
+                  ))}
+                  {storagePendingBanner(storage, lang) && (
+                    <div className="error-box" style={{ whiteSpace: "pre-wrap" }}>
+                      {storagePendingBanner(storage, lang)}
+                    </div>
+                  )}
+                  <label className="settings-field">
+                    <span className="settings-label">{lang === "zh" ? "改到新位置" : "New location"}</span>
+                    <input
+                      className="settings-control"
+                      value={storageRoot}
+                      onChange={(e) => setStorageRoot(e.target.value)}
+                      placeholder="D:\\PaperMate"
+                    />
+                    <span className="settings-hint">
+                      {lang === "zh"
+                        ? `至少需要 ${storage.min_free_gb} GB 可用空间；该目录下会新建 data / huggingface / venv / uv-cache。`
+                        : `needs at least ${storage.min_free_gb} GB free; creates data / huggingface / venv / uv-cache under it.`}
+                    </span>
+                  </label>
+                  <label className="settings-field">
+                    <input
+                      type="checkbox"
+                      checked={storageMigrate}
+                      onChange={(e) => setStorageMigrate(e.target.checked)}
+                    />
+                    <span className="settings-hint">
+                      {lang === "zh"
+                        ? "搬迁现有数据（原位置的副本会保留、不删除；venv 含绝对路径无法搬迁，会在新位置重建）"
+                        : "Migrate existing data (old copy kept; venv is rebuilt because it contains absolute paths)"}
+                    </span>
+                  </label>
+                  <button className="btn-primary" disabled={storageSaving} onClick={saveStorage}>
+                    {storageSaving
+                      ? (lang === "zh" ? "保存中…" : "Saving…")
+                      : (lang === "zh" ? "保存（重启应用后生效）" : "Save (restart to apply)")}
+                  </button>
+                </>
+              )}
+            </div>
             <div className="inventory-block">
               <span className="settings-label">{t("settings.tools")}（{inventory?.tools.length ?? 0}）</span>
               <div className="inventory-grid">

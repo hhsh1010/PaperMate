@@ -93,19 +93,32 @@ def test_all_four_dirs_derive_from_data_root():
 
 
 def test_default_root_is_local_data_so_behavior_is_unchanged():
-    """★ 默认行为零变化：没有配置时 root == `<local_data>` ⇒ 四条路径与本改造前一致。"""
+    """★ 默认行为零变化：没有配置时 root == `<local_data>` ⇒ 四条路径与本改造前一致。
+
+    ★ 2026-10-07 结构变了：判定逻辑从 `resolve_data_root` 移进了 `AppSettings::read`
+      （"读配置"现在被首启与 pending 迁移两处共用）⇒ 断言跟着结构走，**意图不变**。
+    """
+    read_body = _fn_body("read", "\nfn ")
+    assert "is_file()" in read_body, "AppSettings::read 必须先判断配置文件是否存在"
+    assert "None" in read_body, "文件不存在（或损坏）时必须返回 None"
+
     body = _fn_body("resolve_data_root", "\nfn ")
-    assert "local_data.join(APP_SETTINGS)" in body, "首次判据必须看 app-settings.json"
-    assert body.count("local_data.to_path_buf()") >= 2, (
-        "resolve_data_root 的回退必须是 local_data（含'配置损坏'那条路径）"
+    assert "None => (local_data.to_path_buf(), true)" in body, (
+        "没有配置 ⇒ 用默认位置，并标记为「首次」"
+    )
+    assert "unwrap_or_else(|| local_data.to_path_buf())" in body, (
+        "配置里没有 data_root 时必须回退默认位置"
     )
 
 
 # ───────────────── 3. 首启：判定 / 写配置 / 线程 ─────────────────
 def test_first_run_is_decided_by_app_settings_existence():
+    """首次判据 = `app-settings.json` 不存在 ⇒ `(默认位置, first_run=true)`。"""
+    read_body = _fn_body("read", "\nfn ")
+    assert "APP_SETTINGS" in read_body, "AppSettings::read 必须读 APP_SETTINGS 那个文件"
     body = _fn_body("resolve_data_root", "\nfn ")
-    assert "is_file()" in body and "return (local_data.to_path_buf(), true)" in body, (
-        "首次判据应为「app-settings.json 不存在」且返回 first_run=true"
+    assert "(root, false)" in body and "(local_data.to_path_buf(), true)" in body, (
+        "有配置 ⇒ 非首次；无配置 ⇒ 首次"
     )
 
 
@@ -183,3 +196,61 @@ def test_startup_page_needs_no_ipc_and_no_capability():
         "本项目没有 capability 文件；若开启 withGlobalTauri 而不配 capability，"
         "任何 JS→Rust 调用都会静默失败"
     )
+
+
+# ───────────────── 6. 设置页改位置 + 重启迁移（2026-10-07 追加）─────────────────
+def test_pending_migration_runs_before_the_backend_is_spawned():
+    """★★ 迁移必须在**后端启动之前**完成。
+
+    那时 SQLite 未打开、venv 未加载 ⇒ 不存在"拷到一半"导致数据不一致的可能。
+    若顺序颠倒（先 spawn 再迁移），搬迁的就是一个**正在被写**的数据库目录。
+    """
+    body = _fn_body("bootstrap_and_spawn", None)
+    i_migrate = body.index("apply_pending_migration(")
+    i_spawn = body.index("papermate.api")
+    assert i_migrate < i_spawn, "apply_pending_migration 必须在 spawn 后端之前调用"
+
+
+def test_migration_moves_data_weights_cache_but_never_venv():
+    """★ 搬 `data/` `huggingface/` `uv-cache/`，**不搬** `venv/`。
+
+    venv 内部全是绝对路径（`.pth` 指向源码、`pyvenv.cfg` 指向便携 Python、脚本 shebang）
+    ⇒ 复制过去会坏；正确做法是在新位置**重建**（`uv-cache` 跟着搬了，重建会命中硬链接）。
+    """
+    body = _fn_body("migrate_data_dirs", "\nfn ")
+    listed = re.search(r'for name in \[([^\]]+)\]', body)
+    assert listed, "未找到要搬迁的目录清单"
+    names = set(re.findall(r'"([^"]+)"', listed.group(1)))
+    assert names == {"data", "huggingface", "uv-cache"}, f"搬迁清单不符预期：{names}"
+    assert "venv" not in names, "venv 含绝对路径，**只能重建不能搬**"
+
+
+def test_migration_never_deletes_the_source():
+    """★★ 迁移**永不删除源目录** —— 「删用户数据」不该由程序悄悄做。"""
+    body = _fn_body("migrate_data_dirs", "\nfn ")
+    assert "remove_dir_all" not in body, "迁移里出现了删除目录的调用"
+    body2 = _fn_body("apply_pending_migration", "\nfn ")
+    assert "remove_dir_all" not in body2, "pending 处理里出现了删除目录的调用"
+
+
+def test_migration_verifies_file_count_after_copy():
+    """★ 搬完必须**逐项核对文件数**，不一致即报错（跨盘复制中途失败会静默产生半份数据）。"""
+    body = _fn_body("migrate_data_dirs", "\nfn ")
+    assert "count_files(" in body
+    assert re.search(r"count_files\(&from\)\s*,\s*count_files\(&to\)|\(a, b\) = \(count_files", body), (
+        "搬迁后必须比较源与目标的文件数"
+    )
+    assert "不一致" in body, "校验失败应有明确文案"
+
+
+def test_pending_request_is_cleared_on_both_success_and_failure():
+    """★ 请求处理完（含失败）都要把 `pending_root` 清掉，否则每次启动都会重试。"""
+    body = _fn_body("apply_pending_migration", "\nfn ")
+    assert body.count("write_root_only(") >= 3, (
+        f"成功/校验失败/迁移失败/写配置失败 四条路径都应写回（当前 {body.count('write_root_only(')} 处）"
+    )
+
+
+def test_backend_receives_the_settings_path():
+    """★ 后端必须知道配置文件在哪 —— 数据目录可能已搬到别处，它无法从 `data_dir` 反推。"""
+    assert '.env("PAPERMATE_APP_SETTINGS"' in _LIB, "未向后端注入 PAPERMATE_APP_SETTINGS"

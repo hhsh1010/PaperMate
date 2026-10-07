@@ -628,6 +628,50 @@ export interface ProviderPublic {
   available_models: string[];
 }
 
+// ── 存储位置（2026-10-07）──────────────────────────────────────────
+// ★ 字段必须与 `schemas.py::StorageOut` **逐个对应**：后端 `response_model`
+//   会把未声明的字段**静默裁掉**（本项目已踩过：表现为"后端返回了、前端读不到"）。
+export interface StorageDrive {
+  root: string;
+  free_gb: number;
+  total_gb: number;
+  /** FIXED / REMOVABLE / REMOTE / CDROM / RAMDISK / UNKNOWN */
+  kind: string;
+}
+
+export interface StorageSize {
+  mb: number;
+  /** true = 因文件数超限只统计了一部分，数值是**下界** */
+  truncated: boolean;
+}
+
+export interface StorageOut {
+  available: boolean;
+  unavailable_reason: string | null;
+  config_path: string | null;
+  data_root: string;
+  pending_root: string | null;
+  migrate: boolean;
+  /** 四个子目录的绝对路径：data / huggingface / venv / uv-cache */
+  dirs: Record<string, string>;
+  /** 只含 data 与 huggingface（venv / uv-cache 文件太多，量起来慢） */
+  sizes_mb: Record<string, StorageSize>;
+  drives: StorageDrive[];
+  min_free_gb: number;
+  restart_required: boolean;
+}
+
+export interface StorageUpdateIn {
+  data_root: string;
+  migrate: boolean;
+}
+
+export interface StorageUpdateOut {
+  ok: boolean;
+  restart_required: boolean;
+  warnings: string[];
+}
+
 /** 后端 GET /api/v1/settings 返回的前端可填设置 */
 export interface AppSettings {
   default_model: string;

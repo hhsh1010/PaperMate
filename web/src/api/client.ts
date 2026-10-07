@@ -15,6 +15,9 @@ import type {
   FeedbackOut,
   FeedbackSummaryOut,
   InventoryOut,
+  StorageOut,
+  StorageUpdateIn,
+  StorageUpdateOut,
   MemoryItemOut,
   MetricAlert,
   MetricsOut,
@@ -500,6 +503,24 @@ export const api = {
   /** 本地数据管理：工具与技能清单 */
   async getInventory(): Promise<InventoryOut> {
     return json(await fetch(`${BASE}/settings/inventory`));
+  },
+
+  // ── 存储位置（2026-10-07）：查当前位置 / 申请改位置 ──
+  /** ★ 只**读取**当前位置与本机磁盘；不会碰任何文件。 */
+  async getStorage(): Promise<StorageOut> {
+    return json(await fetch(`${BASE}/settings/storage`));
+  },
+
+  /** ★ 只**写入待迁移请求**（`pending_root`），**不执行**迁移。
+   *  真正的搬迁由桌面启动器在重启时、后端启动之前完成（那时 SQLite 未打开）。 */
+  async updateStorage(body: StorageUpdateIn): Promise<StorageUpdateOut> {
+    return json(
+      await fetch(`${BASE}/settings/storage`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    );
   },
 
   // ── 真实语义检索模型的显式安装（2026-10-05：App 装完默认 fake，由用户主动下载）──
