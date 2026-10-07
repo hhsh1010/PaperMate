@@ -1,8 +1,10 @@
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::Mutex;
 
 use tauri::Manager;
+use tauri_plugin_dialog::DialogExt;
 
 // 与主进程绑定的 sidecar 子进程句柄（退出时清理进程树）
 static BACKEND: Mutex<Option<Child>> = Mutex::new(None);
@@ -10,6 +12,18 @@ static BACKEND: Mutex<Option<Child>> = Mutex::new(None);
 const HOST: &str = "127.0.0.1";
 const PORT: u16 = 8000;
 const APP_DATA: &str = "PaperMate";
+
+/// **App 级引导配置**（存"数据根目录"）。
+///
+/// ★★ 为什么它必须放在**固定位置**（`<local_data>/app-settings.json`），而不能放进数据目录：
+///   数据目录本身是由这个配置决定的 —— 放进去就成了"要知道位置才能读到位置"的鸡生蛋。
+const APP_SETTINGS: &str = "app-settings.json";
+
+/// 首启选择数据位置时要求的**最小磁盘余量（GB）**。
+///
+/// 依据（实测）：权重 ≈4.5GB + 轻量依赖 ≈0.5GB + 装 torch 后 venv ≈4GB + uv-cache ≈1.5GB，
+/// 加上临时空间与安全余量，取整 8GB 起步（避免用户选完才发现装不下）。
+const MIN_FREE_GB: f64 = 8.0;
 
 /// 等后端**真正开始监听**的最长时间。
 ///
@@ -111,10 +125,22 @@ pub fn run() {
     //   ⇒ 所以流程是 build → 拿到 App → 再 run(callback)。
     let built = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        // ★ 原生文件夹选择器（首启让用户选数据位置）——`ask_data_root()` 用 `app.dialog()`。
+        //   ⚠️ **必须注册**：只加 Cargo 依赖是不够的；`DialogExt::dialog()` 依赖插件被 init
+        //   注册进来的状态。漏了这一步**编译期完全看不出来**，只在运行时炸。
+        //   `tests/test_tauri_config.py` 有一条静态契约钉死它。
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // 引导逻辑只需要 `&AppHandle` ⇒ 用 `app.handle()` 取句柄。
             // （直接传 `app` 会报 expected `&AppHandle`, found `&mut App`）
-            bootstrap_and_spawn(app.handle());
+            //
+            // ★★ 2026-10-07：**必须放到后台线程**，两个理由：
+            //   ① 首启要弹原生**阻塞式**文件夹选择器，而插件文档明确写着
+            //      "This is a blocking operation, and should *NOT* be used when running
+            //       on the main thread."（`tauri-plugin-dialog/src/lib.rs:744`）—— 主线程调用会死锁；
+            //   ② `uv sync` 首次要跑几分钟，阻塞 setup 会把事件循环占住（窗口"无响应"）。
+            let handle = app.handle().clone();
+            std::thread::spawn(move || bootstrap_and_spawn(&handle));
             Ok(())
         })
         .build(tauri::generate_context!());
@@ -191,6 +217,331 @@ fn navigate_when_backend_ready(app: tauri::AppHandle, port: u16) {
     }
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// 数据根目录：配置读写 / 校验 / 首启选择（2026-10-07）
+//
+// 布局：`<root>/{data, huggingface, venv, uv-cache}` —— **一个根目录管四件事**。
+//   · data         → PAPERMATE_DATA_DIR（用户数据：DB/索引/上传/备份/日志/设置/记忆）
+//   · huggingface  → HF_HOME（模型权重 ≈4.5GB）
+//   · venv         → UV_PROJECT_ENVIRONMENT + PAPERMATE_VENV_DIR（装 torch 后 ≈4GB）
+//   · uv-cache     → UV_CACHE_DIR + PAPERMATE_UV_CACHE_DIR
+// ★ 默认 root = `<local_data>`（= `%LOCALAPPDATA%\PaperMate`）⇒ 四条路径与改造前**逐字节相同**。
+// ★ 为什么 venv 也在 root 下：用户选它多半就是为了"别塞满 C 盘"，而 venv 是第二大件。
+//   代价：换位置时 venv 必须**重建**（它里面全是绝对路径：.pth 指向源码、pyvenv.cfg
+//   指向便携 Python、脚本 shebang）—— 这条已写进设计文档，UI 上也要讲清楚。
+// ───────────────────────────────────────────────────────────────────────────
+
+/// 只用两个 kernel32 函数：磁盘余量、盘类型。
+///
+/// ★ 为什么不引 crate：各十几行 FFI 就够，而本项目刻意保持依赖精简。
+/// ⚠️ 形状**已用独立可执行文件真跑过**并与 `df -h` 对照（C: 86.9G / D: 146.3G 一致）——
+///   "手写 Rust 无编译器时 API 形状几乎必错"，所以这里不靠记忆、靠实测。
+#[cfg(windows)]
+mod winfs {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetDiskFreeSpaceExW(
+            dir: *const u16,
+            free_to_caller: *mut u64,
+            total: *mut u64,
+            total_free: *mut u64,
+        ) -> i32;
+        fn GetDriveTypeW(root: *const u16) -> u32;
+    }
+
+    fn wide(s: &str) -> Vec<u16> {
+        OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
+    }
+
+    /// 调用方可用字节数；盘不存在/未就绪时返回 None。
+    pub fn free_bytes(dir: &str) -> Option<u64> {
+        let p = wide(dir);
+        let (mut avail, mut total, mut free) = (0u64, 0u64, 0u64);
+        let ok = unsafe { GetDiskFreeSpaceExW(p.as_ptr(), &mut avail, &mut total, &mut free) };
+        if ok == 0 {
+            None
+        } else {
+            Some(avail)
+        }
+    }
+
+    /// 盘类型：2=可移动 3=固定 4=网络 5=光驱 …。**不产生 I/O**（比 `Path::exists()` 安全：
+    /// 后者在断开的网络盘上可能卡住数秒）。
+    pub fn drive_type(root: &str) -> u32 {
+        let p = wide(root);
+        unsafe { GetDriveTypeW(p.as_ptr()) }
+    }
+}
+
+#[cfg(not(windows))]
+mod winfs {
+    pub fn free_bytes(_dir: &str) -> Option<u64> {
+        None
+    }
+    pub fn drive_type(_root: &str) -> u32 {
+        0
+    }
+}
+
+/// `app-settings.json` 的结构。带 `schema` 以便将来改语义时能迁移。
+#[derive(serde::Deserialize, serde::Serialize)]
+struct AppSettings {
+    schema: u32,
+    #[serde(default)]
+    data_root: Option<String>,
+}
+
+/// 路径比较用归一化：去掉 Windows 的 `\\?\` verbatim 前缀 + 转小写。
+///
+/// ★ 必须做：Tauri 的 `resource_dir()` 返回的就是**带 `\\?\` 前缀**的长路径
+///   （本项目 10-07 已因此踩过一次），直接比较会"看起来该相等却永远不相等"。
+fn norm_for_cmp(p: &Path) -> String {
+    let s = p.to_string_lossy().to_lowercase();
+    s.strip_prefix(r"\\?\").map(str::to_string).unwrap_or(s)
+}
+
+/// 解析数据根目录 → `(root, 是否首次运行)`。
+///
+/// ★ **首次的判据 = `app-settings.json` 是否存在**（该文件只在"位置已确定"之后写，
+///   包含"用户取消 → 采用默认"的情况）⇒ 卸载重装后仍是"非首次"（数据还在，正确）。
+/// ★ 配置损坏/读不出 ⇒ 回退默认 + 日志，**绝不 panic**（起不来是最坏结果）。
+fn resolve_data_root(local_data: &Path) -> (PathBuf, bool) {
+    let cfg_path = local_data.join(APP_SETTINGS);
+    if !cfg_path.is_file() {
+        return (local_data.to_path_buf(), true);
+    }
+    let parsed = fs::read_to_string(&cfg_path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<AppSettings>(&s).ok());
+    match parsed {
+        Some(s) => {
+            let root = s
+                .data_root
+                .as_deref()
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from)
+                .unwrap_or_else(|| local_data.to_path_buf());
+            (root, false)
+        }
+        None => {
+            eprintln!("[desktop] app-settings.json 无法解析，回退默认数据位置");
+            (local_data.to_path_buf(), false)
+        }
+    }
+}
+
+/// **原子**写入 `app-settings.json`（先写 .tmp 再改名，避免写一半损坏）。
+fn write_app_settings(local_data: &Path, root: &Path) -> std::io::Result<()> {
+    let body = serde_json::to_string_pretty(&AppSettings {
+        schema: 1,
+        data_root: Some(root.to_string_lossy().to_string()),
+    })
+    .unwrap_or_else(|_| r#"{"schema":1}"#.to_string());
+    let dst = local_data.join(APP_SETTINGS);
+    let tmp = local_data.join(format!("{APP_SETTINGS}.tmp"));
+    fs::write(&tmp, body)?;
+    // Windows 上目标已存在时 rename 会失败 ⇒ 先删再改名。
+    if fs::rename(&tmp, &dst).is_err() {
+        let _ = fs::remove_file(&dst);
+        fs::rename(&tmp, &dst)?;
+    }
+    Ok(())
+}
+
+/// 校验用户选的位置能不能当数据根目录。`Err` 里的文案**直接展示给用户**。
+///
+/// 每一步都对应一类真实故障：相对路径（CWD 分叉）、网络盘（SQLite 锁不可靠）、
+/// 安装目录内（升级被覆盖）、不可写（Windows 上 `os.access` 是**假信号** ⇒ 真写真删）、
+/// 余量不足（权重 4.5GB + venv 4GB）。
+fn validate_data_root(root: &Path, install_dir: &Path) -> Result<(), String> {
+    if !root.is_absolute() {
+        return Err("请选择完整的绝对路径（例如 D:\\PaperMate）。".to_string());
+    }
+    let raw = root.to_string_lossy().to_string();
+    if raw.starts_with(r"\\") || raw.starts_with("//") {
+        return Err(
+            "不能使用网络位置（\\\\服务器\\共享）：SQLite 在网络盘上的锁语义不可靠。\n请改选本机磁盘。"
+                .to_string(),
+        );
+    }
+    // 映射出来的网络盘（看着像 Z:\）—— 用盘类型判，不产生 I/O。
+    if let Some(letter) = raw.chars().next() {
+        if winfs::drive_type(&format!("{letter}:\\")) == 4 {
+            return Err(
+                "该盘是**网络映射盘**（REMOTE）：SQLite 在其上锁不可靠。\n请改选本机磁盘。".to_string(),
+            );
+        }
+    }
+    if norm_for_cmp(root).starts_with(&norm_for_cmp(install_dir)) {
+        return Err("不要把数据放在应用安装目录里 —— 升级时会被覆盖。".to_string());
+    }
+    fs::create_dir_all(root).map_err(|e| format!("无法创建目录：{}\n{}", root.display(), e))?;
+    // ★ 真写真删：Windows 上 `os.access(W_OK)` 是假信号（本项目 10-06 血泪）。
+    let probe = root.join(".papermate-write-probe");
+    fs::write(&probe, b"ok").map_err(|e| format!("该位置不可写：{}\n{}", root.display(), e))?;
+    let _ = fs::remove_file(&probe);
+
+    match winfs::free_bytes(&raw) {
+        Some(bytes) => {
+            let gb = bytes as f64 / 1024.0 / 1024.0 / 1024.0;
+            if gb < MIN_FREE_GB {
+                return Err(format!(
+                    "该磁盘剩余 {gb:.1} GB，至少需要 {MIN_FREE_GB:.0} GB\n（模型权重约 4.5GB + 运行环境约 4GB）。请换一个位置。"
+                ));
+            }
+        }
+        None => {
+            // 取不到就**不拦**（例如权限受限），但要留痕 —— 宁可放过，也不要卡死首启。
+            eprintln!("[desktop] 读不到 {} 的磁盘余量，跳过余量检查", root.display());
+        }
+    }
+    Ok(())
+}
+
+/// 列出本机可用磁盘（盘符 + 可用 GB），供首启面板显示。
+fn list_drives() -> Vec<(String, f64)> {
+    let mut out = Vec::new();
+    for c in b'C'..=b'Z' {
+        let root = format!("{}:\\", c as char);
+        let t = winfs::drive_type(&root);
+        if t != 2 && t != 3 {
+            continue; // 只列 可移动(2) / 固定(3)
+        }
+        if let Some(b) = winfs::free_bytes(&root) {
+            out.push((root, b as f64 / 1024.0 / 1024.0 / 1024.0));
+        }
+    }
+    out
+}
+
+/// 生成合法的 JS 字符串字面量 —— 路径里全是反斜杠，不转义必炸（本项目已踩过同款）。
+fn js_str(s: &str) -> String {
+    serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string())
+}
+
+/// 往窗口注入一段 JS。失败只记日志 —— 这是**展示**通道，不能因为它中断启动。
+fn eval_js(app: &tauri::AppHandle, js: String) {
+    if let Some(win) = app.get_webview_window("main") {
+        if let Err(e) = win.eval(js) {
+            eprintln!("[desktop] eval failed: {}", e);
+        }
+    }
+}
+
+/// 让等待页切到「首次启动」形态。
+///
+/// ★ 用户的操作发生在**原生文件夹选择器**里 ⇒ **不需要 JS→Rust 的 IPC**，
+///   也就不需要 capability（本仓库至今没有任何 capability 文件）。
+fn show_first_run_panel(app: &tauri::AppHandle, default_root: &Path, has_existing: bool) {
+    let drives = list_drives()
+        .into_iter()
+        .map(|(p, gb)| format!("{p}（可用 {gb:.0} GB）"))
+        .collect::<Vec<_>>()
+        .join("    ");
+    let js = format!(
+        "window.pmFirstRun && window.pmFirstRun({{defaultRoot: {}, drives: {}, minFreeGb: {}, hasExisting: {}}});",
+        js_str(&default_root.to_string_lossy()),
+        js_str(&drives),
+        MIN_FREE_GB,
+        has_existing
+    );
+    eval_js(app, js);
+}
+
+/// 默认位置上**是否已经存在真实数据**。
+///
+/// ★ 为什么必须查：判据只有 `app-settings.json` 存不存在 ⇒ **老用户升级后首次启动
+///   也会弹一次选择框**。此时若他误选了别的位置，看到的就是"数据全没了"，
+///   而其实旧数据原地未动。⇒ 必须提前告诉他"继续用默认即可，别换"。
+fn default_root_has_data(default_root: &Path) -> bool {
+    default_root
+        .join("data")
+        .join("papermate.db")
+        .is_file()
+}
+
+/// 回显最终采用的根目录（含"用户取消 → 用默认"：**不静默**）。
+fn show_root_choice(app: &tauri::AppHandle, root: &Path) {
+    eval_js(
+        app,
+        format!(
+            "window.pmRootChosen && window.pmRootChosen({});",
+            js_str(&root.to_string_lossy())
+        ),
+    );
+}
+
+/// 首启：弹**原生**文件夹选择器定数据根目录，返回最终采用的根目录。
+///
+/// ★ 无论成功/取消/校验失败，**都会写 `app-settings.json`** —— 否则下次启动还会再问一遍。
+/// ★ 最多重试 3 次：不让用户被卡死在首启（"首启必须能起来"优先级最高）。
+fn ask_data_root(app: &tauri::AppHandle, local_data: &Path, install_dir: &Path) -> PathBuf {
+    let has_existing = default_root_has_data(local_data);
+    show_first_run_panel(app, local_data, has_existing);
+    if has_existing {
+        eprintln!(
+            "[desktop] first run: default location already holds data -> hinting the user to keep it"
+        );
+    }
+    for attempt in 1..=3 {
+        let picked = app
+            .dialog()
+            .file()
+            .set_title("PaperMate 首次启动 · 请选择数据存放位置")
+            .set_directory(local_data)
+            .blocking_pick_folder();
+        let Some(fp) = picked else {
+            // 取消 ⇒ 用默认位置，但**显式回显**（不静默）
+            let _ = write_app_settings(local_data, local_data);
+            show_root_choice(app, local_data);
+            return local_data.to_path_buf();
+        };
+        match fp.into_path() {
+            Ok(p) => match validate_data_root(&p, install_dir) {
+                Ok(()) => {
+                    if let Err(e) = write_app_settings(local_data, &p) {
+                        eprintln!("[desktop] cannot write app-settings.json: {e}");
+                    }
+                    show_root_choice(app, &p);
+                    return p;
+                }
+                Err(msg) => {
+                    eprintln!("[desktop] data root rejected (attempt {attempt}): {msg}");
+                    show_startup_error(
+                        app,
+                        &format!("{msg}\n\n请重新选择（第 {attempt}/3 次）。"),
+                    );
+                }
+            },
+            Err(e) => {
+                eprintln!("[desktop] picked path unusable: {e}");
+                show_startup_error(app, "所选位置无法解析，请重新选择。");
+            }
+        }
+    }
+    // 3 次都没通过 ⇒ 用默认位置继续（首启不能被卡死）
+    let _ = write_app_settings(local_data, local_data);
+    show_root_choice(app, local_data);
+    local_data.to_path_buf()
+}
+
+/// 派生目录解析：**外部已显式设置则尊重它**，否则用 `<root>/<子目录>`。
+///
+/// ★ 保留这个逃生口的理由与 `HF_ENDPOINT` / `UV_CACHE_DIR` 的处理一致：
+///   排查或仿真（如 `firstuse-sim.ps1` 的隔离）时可以临时把某一项指到别处，
+///   而默认值仍然由"数据根目录"这一个入口决定（保持确定性）。
+fn dir_or_env(env_key: &str, fallback: PathBuf) -> PathBuf {
+    std::env::var(env_key)
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or(fallback)
+}
+
 fn bootstrap_and_spawn(app: &tauri::AppHandle) {
     // ⚠️ Tauri 2.12 起 `resource_dir()` / `local_data_dir()` 返回 **Result<PathBuf, Error>**
     //    而不是早期的 `Option<PathBuf>`（源码 path/desktop.rs:230 / :86）。
@@ -213,24 +564,30 @@ fn bootstrap_and_spawn(app: &tauri::AppHandle) {
             return;
         }
     };
-    let data_dir = local_data.join("data");
-    let hf_home = local_data.join("huggingface");
-    let venv_dir = local_data.join("venv");
-    // ★ App 专属 uv 分发缓存（与 venv / huggingface 并列在 App 数据目录下）。
+    // ── 数据根目录：首启让用户**选**，之后从 `app-settings.json` 读 ──────────────
+    //   ★ 必须在这里、即在**创建任何目录之前**：一旦先建了目录，用户的选择就失去意义。
+    let (mut data_root, first_run) = resolve_data_root(&local_data);
+    if first_run {
+        eprintln!("[desktop] first run: asking the user where to store data ...");
+        data_root = ask_data_root(app, &local_data, &res_dir);
+        eprintln!("[desktop] data root = {}", data_root.display());
+    }
+
+    // 四个派生目录。★ 默认 root == local_data ⇒ 与本改造之前**逐字节相同**。
+    //   · 每一项都支持"外部显式设置则尊重它"（逃生口，见 dir_or_env）
+    //   · ⚠️ 后端 `rag_deps` 需要 `PAPERMATE_VENV_DIR` / `PAPERMATE_UV_CACHE_DIR` 才能
+    //     与这里**同源**（否则它会退回用 `data_dir.parent` 推导，见本文件 spawn 处的注入）
+    let data_dir = dir_or_env("PAPERMATE_DATA_DIR", data_root.join("data"));
+    let hf_home = dir_or_env("HF_HOME", data_root.join("huggingface"));
+    let venv_dir = dir_or_env("UV_PROJECT_ENVIRONMENT", data_root.join("venv"));
+    // ★ App 专属 uv 分发缓存（与 venv / huggingface 并列）。
     //   2026-10-06 实测事故：共用用户全局 uv 缓存时，首启因一个**损坏的缓存条目**失败：
     //     Failed to write to the distribution cache / failed to open file
     //     ...\uv\cache\sdists-v9\...\jieba-0.42.1-py3-none-any.whl: 拒绝访问 (os error 5)
     //   该 .whl 连 `uv cache clean` 都删不掉、`icacls` 读不到 ACL（属主/ACL 异常），
     //   而同目录其它文件可正常删除 ⇒ 全局缓存里有**永久损坏的条目**。
     //   指向 App 私有目录后，启动不再依赖用户机器上的历史残留。
-    //   ⚠️ 后端 `rag_deps.uv_cache_dir()` 用同一约定（<local_data>/uv-cache），两处必须一致。
-    //   ★ 若外部已显式设置 UV_CACHE_DIR，则**尊重它**（与 HF_ENDPOINT 的处理一致）——
-    //     既保留"排查时可临时指到别处"的逃生口，也让默认值保持确定性。
-    let uv_cache_dir = std::env::var("UV_CACHE_DIR")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| local_data.join("uv-cache"));
+    let uv_cache_dir = dir_or_env("UV_CACHE_DIR", data_root.join("uv-cache"));
     let venv_python = venv_dir.join("Scripts").join("python.exe");
 
     if let Err(e) = fs::create_dir_all(&data_dir) {
@@ -250,16 +607,24 @@ fn bootstrap_and_spawn(app: &tauri::AppHandle) {
 
     // 后端 .env（pydantic-settings 的 env_file=".env" 从 CWD 读取；
     // 捆绑的 backend 副本故意不含项目真实 .env，只写桌面专用覆盖项）。
+    //
+    // ★ 2026-10-07：改为**每次启动都重写**。原先只在"文件不存在时写"，
+    //   于是用户改了数据位置之后，这个文件会一直写着**旧路径** —— 功能上不会错
+    //   （进程 env 的优先级高于 .env），但排查时会被它误导（本项目已多次被"陈旧陈述"坑过）。
+    //   ⚠️ 安装目录可能只读 ⇒ 写失败只记日志：**权威来源是进程 env，不是这个文件**。
     let env_file = backend_dir.join(".env");
-    if !env_file.exists() {
-        let content = format!(
-            "PAPERMATE_HOST={host}\nPAPERMATE_PORT={port}\nPAPERMATE_DATA_DIR={dd}\nHF_HOME={hf}\nHF_ENDPOINT=https://hf-mirror.com\n",
-            host = HOST,
-            port = PORT,
-            dd = data_dir.display(),
-            hf = hf_home.display()
+    let content = format!(
+        "PAPERMATE_HOST={host}\nPAPERMATE_PORT={port}\nPAPERMATE_DATA_DIR={dd}\nHF_HOME={hf}\nHF_ENDPOINT=https://hf-mirror.com\n",
+        host = HOST,
+        port = PORT,
+        dd = data_dir.display(),
+        hf = hf_home.display()
+    );
+    if let Err(e) = fs::write(&env_file, content) {
+        eprintln!(
+            "[desktop] cannot write {:?}: {} (env vars still take precedence)",
+            env_file, e
         );
-        let _ = fs::write(&env_file, content);
     }
 
     // 首次启动：用捆绑 Portable Python + uv 引导安装**轻量**依赖（联网一次）。
@@ -395,15 +760,24 @@ fn bootstrap_and_spawn(app: &tauri::AppHandle) {
         .args(["-m", "papermate.api"])
         .env("PAPERMATE_HOST", HOST)
         .env("PAPERMATE_PORT", PORT.to_string())
-        .env("PAPERMATE_DATA_DIR", &data_dir)
-        .env("HF_HOME", &hf_home)
-        .env("HF_ENDPOINT", "https://hf-mirror.com")
-        .spawn()
+            .env("PAPERMATE_DATA_DIR", &data_dir)
+            .env("HF_HOME", &hf_home)
+            .env("HF_ENDPOINT", "https://hf-mirror.com")
+            // ★★ 2026-10-07：**显式**告诉后端 venv / uv-cache 在哪。
+            //   为什么必须给：后端 `rag_deps.venv_dir()/uv_cache_dir()` 原先**只**从
+            //   `data_dir.parent` 推导 —— 用户一旦把数据根目录换到别处，它会去找
+            //   `<root>/..` 下的 venv，而真实 venv 在 `<root>/venv`
+            //   ⇒ 「准备运行环境 / 下载模型」会**静默失效**（只报"未找到应用私有 venv"）。
+            //   ★ 这两个变量把后端绑到**与上面同一份真源**（同源原则，`tests/test_rag_deps_paths.py` 钉死）。
+            .env("PAPERMATE_VENV_DIR", &venv_dir)
+            .env("PAPERMATE_UV_CACHE_DIR", &uv_cache_dir)
+            .spawn()
     {
         Ok(child) => {
             *BACKEND.lock().unwrap() = Some(child);
-            let handle = app.clone();
-            std::thread::spawn(move || navigate_when_backend_ready(handle, PORT));
+            // 本函数已经跑在**后台线程**上（见 `run()` 的 `setup`），所以这里直接等：
+            // 它只轮询 TCP 端口，不占用事件循环。
+            navigate_when_backend_ready(app.clone(), PORT);
         }
         Err(e) => {
             eprintln!("[desktop] failed to spawn backend: {}", e);

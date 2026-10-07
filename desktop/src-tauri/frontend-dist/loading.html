@@ -14,7 +14,7 @@
         background: #0f1115;
         color: #cdd3df;
       }
-      .box { text-align: center; max-width: 460px; padding: 0 24px; }
+      .box { text-align: center; max-width: 560px; padding: 0 24px; }
       .spin {
         width: 28px; height: 28px;
         border: 3px solid #2a2f3a;
@@ -30,12 +30,40 @@
         line-height: 1.7; text-align: left; white-space: pre-wrap;
       }
       #hint:empty { display: none; }
+      /* 首启面板：后端还不存在时也要能显示（本页是包内本地资源） */
+      #panel { display: none; text-align: left; margin-top: 4px; }
+      #panel h2 { font-size: 15px; margin: 0 0 10px; color: #dfe5f0; text-align: center; }
+      #panel .row { font-size: 12px; color: #8b93a3; line-height: 1.9; }
+      #panel .row b { color: #cdd3df; font-weight: 600; }
+      #panel .k { display: inline-block; min-width: 74px; color: #6b7383; }
+      #panel .warn { color: #e0b16a; }
+      #panel .danger { color: #ff8f8f; }
+      #panel b { color: #dfe5f0; }
     </style>
   </head>
   <body>
     <div class="box">
-      <div class="spin"></div>
+      <div id="spin" class="spin"></div>
       <div id="msg">正在启动本地服务…</div>
+
+      <!-- 首启面板：由 Rust 通过 eval 调用 window.pmFirstRun(...) 显示 -->
+      <div id="panel">
+        <h2>首次启动 · 请选择数据存放位置</h2>
+        <div class="row">
+          <div><span class="k">默认位置</span><b id="p-default">…</b></div>
+          <div><span class="k">可选磁盘</span><span id="p-drives">…</span></div>
+          <div><span class="k">至少需要</span><b id="p-min">…</b> 可用空间</div>
+          <div class="warn" style="margin-top: 8px">
+            将在这个位置下创建 <b>data/</b>（数据库、上传的 PDF、索引）、<b>huggingface/</b>（模型权重）、
+            <b>venv/</b> 与 <b>uv-cache/</b>（运行环境）。
+          </div>
+          <div id="p-existing" class="danger" style="margin-top: 10px" hidden>
+            检测到<b>默认位置已有数据</b>：请直接选择默认位置以继续使用现有数据。
+            若选别的位置，将<b>新建一个空数据目录</b> —— 旧数据不会被删除，但应用将不再使用它。
+          </div>
+        </div>
+      </div>
+
       <div id="hint"></div>
     </div>
     <script>
@@ -48,9 +76,13 @@
       //    后端没起来时窗口就停在 WebView2 的连接错误页、且**不会自愈**
       //    （真机首装要装几十分钟，必然撞上）。现在本地加载，后端没起也能显示本页。
       //
+      // 本页还承担**首次启动**的说明面板（`window.pmFirstRun`）：
+      //   ★ 用户的实际操作发生在 **Rust 弹出的原生文件夹选择器**里
+      //     ⇒ 这里**不需要** JS→Rust 的 IPC，也就不需要 capability。
+      //   Rust 只用已有的 `eval` 通道调用下面两个全局函数。
+      //
       // 就绪后由 **Rust 侧**把窗口导航到真实 UI（它才确切知道后端起没起）——
-      // 见 lib.rs::navigate_when_backend_ready。下面这道探测只是**兜底**
-      // （万一 Rust 的 eval 没生效）。两者都指向同一个 URL，不会冲突。
+      // 见 lib.rs::navigate_when_backend_ready。下面这道探测只是**兜底**。
       //
       // ★ 兜底探测必须用 { mode: "no-cors" }：
       //   本页 origin 是 tauri.localhost，与 127.0.0.1:8000 **跨源**，
@@ -60,22 +92,25 @@
       //     · 服务器有响应 ⇒ promise resolve（opaque 响应，读不到状态码）
       //     · 连接被拒/不可达 ⇒ promise reject
       //   ⇒ 正好可用作"端口通了没"的可达性探测。
-      //   （代价：读不到 HTTP 状态码。后端真出业务错误时由 SPA 自己提示，对首屏等待足够。）
       // ─────────────────────────────────────────────────────────────────────
       (function () {
         var BASE = "http://127.0.0.1:8000";
         var T0 = Date.now();
         var hintShown = false;
+        var firstRun = false;
 
         function el(id) { return document.getElementById(id); }
 
         function tick() {
           var sec = Math.round((Date.now() - T0) / 1000);
-          el("msg").textContent = "正在启动本地服务… 已等待 " + sec + " 秒";
+          // ★ 首启面板显示期间不要覆盖它的标题（否则用户看不到"请选择数据位置"）
+          if (!firstRun) {
+            el("msg").textContent = "正在启动本地服务… 已等待 " + sec + " 秒";
+          }
 
-          // 超过 8 秒还没就绪，多半是**首次启动正在装运行环境**（下载 + 安装依赖）。
-          // 这一步以前完全没有反馈，用户会以为卡死 —— 明确告知并劝阻关窗。
-          if (!hintShown && sec >= 8) {
+          // 超过 8 秒还没就绪，多半是**首次启动正在装运行环境**（下载 + 安装依赖）；
+          // 也可能是用户正在原生对话框里挑目录。两种都明确告知，避免被当成卡死。
+          if (!hintShown && sec >= 8 && !firstRun) {
             hintShown = true;
             el("hint").textContent =
               "首次启动需要安装本地运行环境，视网速可能持续数分钟。\n" +
@@ -89,6 +124,32 @@
             .then(function () { location.href = BASE + "/"; })
             .catch(function () { setTimeout(tick, 1000); });
         }
+
+        // Rust 在首启时调用：切到「选择数据位置」形态
+        window.pmFirstRun = function (o) {
+          firstRun = true;
+          el("spin").style.display = "none";
+          el("panel").style.display = "block";
+          el("msg").textContent = "首次启动：请选择数据存放位置";
+          el("p-default").textContent = o && o.defaultRoot ? o.defaultRoot : "…";
+          el("p-drives").textContent = o && o.drives ? o.drives : "…";
+          el("p-min").textContent = o && o.minFreeGb ? String(o.minFreeGb) + " GB" : "…";
+          // ★ 默认位置已有数据时必须**醒目提醒**，否则用户误选别处会以为"数据全丢了"
+          if (o && o.hasExisting) {
+            el("p-existing").hidden = false;
+          }
+          el("hint").textContent =
+            "即将弹出文件夹选择窗口（默认已定位到上面这个位置）：选好后点「确定」。\n" +
+            "直接关闭该窗口 = 使用上面的默认位置（之后可在设置页再改）。";
+        };
+
+        // Rust 在位置确定后调用（含"用户取消 ⇒ 用默认"，不静默）
+        window.pmRootChosen = function (root) {
+          firstRun = false;
+          el("panel").style.display = "none";
+          el("spin").style.display = "";
+          el("hint").textContent = "数据位置：" + root;
+        };
 
         tick();
       })();

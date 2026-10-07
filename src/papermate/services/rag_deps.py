@@ -177,11 +177,23 @@ def venv_dir() -> Path | None:
     """本应用应当安装依赖的 venv 目录。
 
     优先级：
-      1. ``UV_PROJECT_ENVIRONMENT``（``lib.rs`` 引导 uv 时用的同一个变量）；
-      2. ``<data_dir 的上级>/venv`` —— 对应 ``lib.rs`` 的
-         ``local_data/venv`` 与 ``local_data/data`` 布局；
-      3. ``None`` —— 解析不出时**如实降级**（见 :func:`describe_target`）。
+      1. ``PAPERMATE_VENV_DIR`` —— **App 显式指定的存储位置**（桌面端"数据根目录"的子目录）；
+      2. ``UV_PROJECT_ENVIRONMENT``（``lib.rs`` 引导 uv 时用的同一个变量）；
+      3. ``<data_dir 的上级>/venv`` —— 对应 ``lib.rs`` 的
+         ``local_data/venv`` 与 ``local_data/data`` 布局；改用"数据根目录"后
+         ``data_dir = <root>/data`` ⇒ 上级正好是 ``<root>``，仍然指向同一个位置；
+      4. ``None`` —— 解析不出时**如实降级**（见 :func:`describe_target`）。
+
+    ★★ 2026-10-07 为什么必须加第 1 条（**隐藏耦合**）：
+      本函数原先**只**从 ``data_dir.parent`` 推导。一旦用户把数据位置改到
+      ``D:\\PaperMate``（于是 ``data_dir = D:\\PaperMate\\data``），``parent`` 就是 ``D:\\``
+      ⇒ 应用会去找 **``D:\\venv``** —— 那里什么都没有
+      ⇒ 「准备运行环境 / 下载模型」**静默失效**（只报"未找到应用私有 venv"）。
+      ⇒ 所以"存储位置可配置"这个功能**必须先有这条显式通道**才不会打碎重依赖路径。
     """
+    env = os.environ.get("PAPERMATE_VENV_DIR", "").strip()
+    if env:
+        return Path(env)
     env = os.environ.get("UV_PROJECT_ENVIRONMENT", "").strip()
     if env:
         return Path(env)
@@ -211,8 +223,20 @@ def uv_cache_dir() -> Path | None:
       不可接受。指向 App 私有目录后：① 不再受全局缓存污染影响；
       ② 与已有的 `venv` / `huggingface` 布局一致（都在 `<local_data>` 下），便于整体清理。
 
+    ★★ 2026-10-07 优先级修正（**"两把尺子"**）：
+      本函数原先**不读** ``UV_CACHE_DIR``，只从 `data_dir.parent` 推导；
+      而 `sync_heavy_deps()` 真正执行时用的是 ``os.environ["UV_CACHE_DIR"] or <上面那个推导>``。
+      ⇒ **"报告给他看的路径" ≠ "实际使用的路径"**（同一个 App 里两把尺子）。
+      现在把显式通道接上，两者同源。
+
     返回 ``None`` 表示解析不出（与 :func:`venv_dir` 同一套降级逻辑）。
     """
+    env = os.environ.get("PAPERMATE_UV_CACHE_DIR", "").strip()
+    if env:
+        return Path(env)
+    env = os.environ.get("UV_CACHE_DIR", "").strip()
+    if env:
+        return Path(env)
     try:
         from ..config import get_settings
 
@@ -296,10 +320,11 @@ def sync_heavy_deps(
         "UV_HTTP_LOW_SPEED_LIMIT": "10",
     }
     # ★ 用 App 私有 uv 缓存，避免被用户全局缓存里的损坏条目挡住（见 uv_cache_dir 的说明）
-    #   ★ 外部已显式设置则尊重它（与上面 HF_ENDPOINT 的处理一致，保留排查时的逃生口）
+    #   ★ 显式设置优先（`PAPERMATE_UV_CACHE_DIR` → `UV_CACHE_DIR`）**已收敛到 `uv_cache_dir()` 内部**
+    #     ⇒ 这里直接用它的结果，保证 **"报出去的路径" == "实际用的路径"**（消除"两把尺子"）。
     cache = uv_cache_dir()
     if cache is not None:
-        env["UV_CACHE_DIR"] = os.environ.get("UV_CACHE_DIR", "").strip() or str(cache)
+        env["UV_CACHE_DIR"] = str(cache)
     logger.info("开始补装重依赖：%s", " ".join(args))
     try:
         proc = subprocess.run(  # noqa: S603  参数全为本地绝对路径，无 shell
