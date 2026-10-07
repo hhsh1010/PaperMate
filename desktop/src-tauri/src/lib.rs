@@ -202,6 +202,9 @@ fn navigate_when_backend_ready(app: tauri::AppHandle, port: u16) {
         if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(400)).is_ok()
         {
             if let Some(win) = app.get_webview_window("main") {
+                // ★ 首启是 960×640 紧凑窗；导航到主应用前恢复成常规尺寸并居中
+                let _ = win.set_size(tauri::LogicalSize::new(1280u32, 860u32));
+                let _ = win.center();
                 let _ = win.eval(format!("location.href = 'http://127.0.0.1:{port}/';"));
             }
             return;
@@ -600,6 +603,12 @@ fn show_first_run_panel(app: &tauri::AppHandle, default_root: &Path, has_existin
         has_existing
     );
     eval_js(app, js);
+    // ★ 首启面板内容紧凑（≈卡片 680px），把窗口缩到最小可尺寸，避免大片留白。
+    //   960×640 == tauri.conf.json 的 minWidth/minHeight ⇒ set_size 不会被下限钳制产生漂移。
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.set_size(tauri::LogicalSize::new(960u32, 640u32));
+        let _ = win.center();
+    }
 }
 
 /// 默认位置上**是否已经存在真实数据**。
