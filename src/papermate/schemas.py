@@ -984,3 +984,52 @@ class RagInstallStatusOut(BaseModel):
     message: str = ""
     error: str | None = None
     elapsed_s: float = 0.0
+
+
+# ───────────────────── 存储位置（2026-10-07）─────────────────────
+# ★ 响应模型里**必须逐个声明**字段：未声明的会被 `response_model` **静默裁掉**
+#   （本项目已知坑：ParaTransformOut / EvalCaseOut 因此漏过字段，
+#    表现为"后端明明返回了、前端永远读不到"）。
+
+
+class StorageDrive(BaseModel):
+    """本机磁盘（`ctypes` 调 GetLogicalDrives/GetDriveTypeW，不加依赖）。"""
+
+    root: str
+    free_gb: float
+    total_gb: float
+    kind: str  # FIXED / REMOVABLE / REMOTE / CDROM / RAMDISK / UNKNOWN
+
+
+class StorageSize(BaseModel):
+    mb: float
+    truncated: bool  # True = 因文件数超限只统计了部分（数值是下界）
+
+
+class StorageOut(BaseModel):
+    """`GET /api/v1/settings/storage`"""
+
+    available: bool
+    unavailable_reason: str | None = None
+    config_path: str | None = None
+    data_root: str
+    pending_root: str | None = None
+    migrate: bool = False
+    dirs: dict[str, str] = Field(default_factory=dict)
+    sizes_mb: dict[str, StorageSize] = Field(default_factory=dict)
+    drives: list[StorageDrive] = Field(default_factory=list)
+    min_free_gb: float = 8.0
+    restart_required: bool = False
+
+
+class StorageUpdateIn(BaseModel):
+    """`PUT /api/v1/settings/storage`"""
+
+    data_root: str
+    migrate: bool = False
+
+
+class StorageUpdateOut(BaseModel):
+    ok: bool
+    restart_required: bool = True
+    warnings: list[str] = Field(default_factory=list)

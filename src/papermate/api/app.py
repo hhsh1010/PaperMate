@@ -43,6 +43,7 @@ from .routes_prompt import router as prompt_router
 from .routes_search import router as search_router
 from .routes_sessions import router as sessions_router
 from .routes_settings import router as settings_router
+from .routes_storage import router as storage_router
 from .routes_summary import router as summary_router
 from .routes_traces import router as traces_router
 from .routes_transform import router as transform_router
@@ -188,6 +189,7 @@ def create_app() -> FastAPI:
     app.include_router(search_router, prefix="/api/v1")
     app.include_router(usage_router, prefix="/api/v1")
     app.include_router(settings_router, prefix="/api/v1")
+    app.include_router(storage_router, prefix="/api/v1")
     app.include_router(summary_router, prefix="/api/v1")
     app.include_router(traces_router, prefix="/api/v1")
     app.include_router(feedback_router, prefix="/api/v1")

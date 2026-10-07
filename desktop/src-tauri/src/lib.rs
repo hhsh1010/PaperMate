@@ -292,6 +292,58 @@ struct AppSettings {
     schema: u32,
     #[serde(default)]
     data_root: Option<String>,
+    /// ★ 设置页「改存储位置」写入的**待生效目标**（需重启后由启动器执行）。
+    ///   为什么不在运行中的后端里直接搬：那时 SQLite 正被打开、venv 正被加载
+    ///   ⇒ 拷贝到一半失败 = 数据不一致。改为"重启前、后端启动前"执行，全程无锁。
+    #[serde(default)]
+    pending_root: Option<String>,
+    /// 待生效目标是否**搬迁**既有数据（false = 在新位置以空目录启动）。
+    #[serde(default)]
+    migrate: Option<bool>,
+}
+
+impl AppSettings {
+    fn read(local_data: &Path) -> Option<Self> {
+        let p = local_data.join(APP_SETTINGS);
+        if !p.is_file() {
+            return None;
+        }
+        match fs::read_to_string(&p)
+            .ok()
+            .and_then(|s| serde_json::from_str::<Self>(&s).ok())
+        {
+            Some(s) => Some(s),
+            None => {
+                // ★ 配置坏了**绝不能**导致起不来：回退默认 + 日志。
+                eprintln!("[desktop] app-settings.json 无法解析，回退默认数据位置");
+                None
+            }
+        }
+    }
+
+    /// 只带 `data_root`（清空待迁移请求）—— 首启选完、以及迁移成功/失败后都走它。
+    fn only_root(root: &Path) -> Self {
+        AppSettings {
+            schema: 1,
+            data_root: Some(root.to_string_lossy().to_string()),
+            pending_root: None,
+            migrate: None,
+        }
+    }
+
+    fn write(&self, local_data: &Path) -> std::io::Result<()> {
+        let body = serde_json::to_string_pretty(self)
+            .unwrap_or_else(|_| r#"{"schema":1}"#.to_string());
+        let dst = local_data.join(APP_SETTINGS);
+        let tmp = local_data.join(format!("{APP_SETTINGS}.tmp"));
+        fs::write(&tmp, body)?;
+        // Windows 上目标已存在时 rename 会失败 ⇒ 先删再改名。
+        if fs::rename(&tmp, &dst).is_err() {
+            let _ = fs::remove_file(&dst);
+            fs::rename(&tmp, &dst)?;
+        }
+        Ok(())
+    }
 }
 
 /// 路径比较用归一化：去掉 Windows 的 `\\?\` verbatim 前缀 + 转小写。
@@ -307,16 +359,11 @@ fn norm_for_cmp(p: &Path) -> String {
 ///
 /// ★ **首次的判据 = `app-settings.json` 是否存在**（该文件只在"位置已确定"之后写，
 ///   包含"用户取消 → 采用默认"的情况）⇒ 卸载重装后仍是"非首次"（数据还在，正确）。
-/// ★ 配置损坏/读不出 ⇒ 回退默认 + 日志，**绝不 panic**（起不来是最坏结果）。
+/// ★ 配置损坏/读不出 ⇒ `AppSettings::read` 返回 None ⇒ 走"首次"分支并回退默认，
+///   **绝不 panic**（起不来是最坏结果）。
 fn resolve_data_root(local_data: &Path) -> (PathBuf, bool) {
-    let cfg_path = local_data.join(APP_SETTINGS);
-    if !cfg_path.is_file() {
-        return (local_data.to_path_buf(), true);
-    }
-    let parsed = fs::read_to_string(&cfg_path)
-        .ok()
-        .and_then(|s| serde_json::from_str::<AppSettings>(&s).ok());
-    match parsed {
+    match AppSettings::read(local_data) {
+        None => (local_data.to_path_buf(), true),
         Some(s) => {
             let root = s
                 .data_root
@@ -327,29 +374,132 @@ fn resolve_data_root(local_data: &Path) -> (PathBuf, bool) {
                 .unwrap_or_else(|| local_data.to_path_buf());
             (root, false)
         }
-        None => {
-            eprintln!("[desktop] app-settings.json 无法解析，回退默认数据位置");
-            (local_data.to_path_buf(), false)
-        }
     }
 }
 
-/// **原子**写入 `app-settings.json`（先写 .tmp 再改名，避免写一半损坏）。
+/// 写「首次启动已确定位置」。
 fn write_app_settings(local_data: &Path, root: &Path) -> std::io::Result<()> {
-    let body = serde_json::to_string_pretty(&AppSettings {
-        schema: 1,
-        data_root: Some(root.to_string_lossy().to_string()),
-    })
-    .unwrap_or_else(|_| r#"{"schema":1}"#.to_string());
-    let dst = local_data.join(APP_SETTINGS);
-    let tmp = local_data.join(format!("{APP_SETTINGS}.tmp"));
-    fs::write(&tmp, body)?;
-    // Windows 上目标已存在时 rename 会失败 ⇒ 先删再改名。
-    if fs::rename(&tmp, &dst).is_err() {
-        let _ = fs::remove_file(&dst);
-        fs::rename(&tmp, &dst)?;
+    AppSettings::only_root(root).write(local_data)
+}
+
+/// 只更新 `data_root` 并清空待迁移请求。
+fn write_root_only(local_data: &Path, root: &Path) -> std::io::Result<()> {
+    AppSettings::only_root(root).write(local_data)
+}
+
+/// 递归统计文件数（迁移后的**逐项校验**用）。
+fn count_files(dir: &Path) -> usize {
+    let mut n = 0usize;
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(rd) = fs::read_dir(&d) else { continue };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if from.is_dir() {
+            copy_dir_all(&from, &to)?;
+        } else {
+            fs::copy(&from, &to)?;
+        }
     }
     Ok(())
+}
+
+/// 搬走"可搬"的目录：`data/` · `huggingface/` · `uv-cache/`。
+///
+/// ★ `venv/` **不搬**：它内部全是绝对路径（`.pth` 指向源码、`pyvenv.cfg` 指向便携 Python、
+///   脚本 shebang）⇒ 复制过去会坏。正确做法是在新位置**重建**——而因为 `uv-cache` 跟着搬了，
+///   `uv sync` 会直接硬链接命中，重建很快。
+/// ★ 目标已存在同名目录时**跳过**（绝不覆盖/合并两份数据）。
+/// ★★ 每一项搬完都**核对文件数**，不一致即报错回滚（不写配置、继续用旧位置）。
+fn migrate_data_dirs(src_root: &Path, dst_root: &Path) -> std::io::Result<()> {
+    for name in ["data", "huggingface", "uv-cache"] {
+        let from = src_root.join(name);
+        if !from.exists() {
+            eprintln!("[desktop] migrate: skip {name} (源不存在)");
+            continue;
+        }
+        let to = dst_root.join(name);
+        if to.exists() {
+            eprintln!("[desktop] migrate: skip {name} (目标已存在：{})", to.display());
+            continue;
+        }
+        copy_dir_all(&from, &to)?;
+        let (a, b) = (count_files(&from), count_files(&to));
+        if a != b {
+            return Err(std::io::Error::other(format!(
+                "{name} 搬迁后校验不一致：源 {a} 个文件 / 目标 {b} 个"
+            )));
+        }
+        eprintln!("[desktop] migrate: {name} ok ({a} files) -> {}", to.display());
+    }
+    Ok(())
+}
+
+/// ★ 执行设置页写下的**待迁移请求**，返回最终生效的数据根目录。
+///
+/// ★★ 为什么必须在**后端启动之前**做：那时 SQLite 未打开、venv 未被加载
+///    ⇒ 不存在"拷到一半"导致数据不一致的可能。
+/// ★ 任一环节失败 ⇒ **继续用旧位置**（用户的数据就在那儿），并把请求清掉避免反复重试。
+fn apply_pending_migration(local_data: &Path, current: &Path, install_dir: &Path) -> PathBuf {
+    let Some(s) = AppSettings::read(local_data) else {
+        return current.to_path_buf();
+    };
+    let Some(pending) = s
+        .pending_root
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+    else {
+        return current.to_path_buf();
+    };
+    let migrate = s.migrate.unwrap_or(false);
+
+    if norm_for_cmp(&pending) == norm_for_cmp(current) {
+        let _ = write_root_only(local_data, current);
+        return current.to_path_buf();
+    }
+    eprintln!(
+        "[desktop] applying pending data-root change: {} -> {} (migrate={migrate})",
+        current.display(),
+        pending.display()
+    );
+    if let Err(msg) = validate_data_root(&pending, install_dir) {
+        eprintln!("[desktop] pending root rejected: {msg}");
+        let _ = write_root_only(local_data, current);
+        return current.to_path_buf();
+    }
+    // ⚠️ 不用 `if cond && let Err(e) = ...`（let-chains 仅 edition 2024 稳定，本项目是 2021）
+    if migrate {
+        if let Err(e) = migrate_data_dirs(current, &pending) {
+            eprintln!("[desktop] migration failed: {e} -> keep using {}", current.display());
+            let _ = write_root_only(local_data, current);
+            return current.to_path_buf();
+        }
+    }
+    match write_root_only(local_data, &pending) {
+        Ok(()) => pending,
+        Err(e) => {
+            eprintln!("[desktop] cannot persist new data root: {e}");
+            current.to_path_buf()
+        }
+    }
 }
 
 /// 校验用户选的位置能不能当数据根目录。`Err` 里的文案**直接展示给用户**。
@@ -571,6 +721,10 @@ fn bootstrap_and_spawn(app: &tauri::AppHandle) {
         eprintln!("[desktop] first run: asking the user where to store data ...");
         data_root = ask_data_root(app, &local_data, &res_dir);
         eprintln!("[desktop] data root = {}", data_root.display());
+    } else {
+        // ★ 设置页「改存储位置」在这里执行：刻意放在**后端启动之前** ——
+        //   此刻 SQLite 未打开、venv 未加载 ⇒ 不存在"拷到一半"导致数据不一致的可能。
+        data_root = apply_pending_migration(&local_data, &data_root, &res_dir);
     }
 
     // 四个派生目录。★ 默认 root == local_data ⇒ 与本改造之前**逐字节相同**。
@@ -771,6 +925,10 @@ fn bootstrap_and_spawn(app: &tauri::AppHandle) {
             //   ★ 这两个变量把后端绑到**与上面同一份真源**（同源原则，`tests/test_rag_deps_paths.py` 钉死）。
             .env("PAPERMATE_VENV_DIR", &venv_dir)
             .env("PAPERMATE_UV_CACHE_DIR", &uv_cache_dir)
+            // ★ 让后端能**写到**"位置配置"本身 —— 它在**固定的** `<local_data>/app-settings.json`，
+            //   而数据目录可能已经搬到别处 ⇒ 后端无法从 data_dir 反推出来，只能由启动器告知。
+            //   设置页的「改存储位置」就是写这个文件的 `pending_root` 字段（重启后由启动器执行）。
+            .env("PAPERMATE_APP_SETTINGS", local_data.join(APP_SETTINGS))
             .spawn()
     {
         Ok(child) => {
