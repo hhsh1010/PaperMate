@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
+use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 
 use tauri::Manager;
@@ -38,6 +38,119 @@ const READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
 ///   或反之（首启又变成 4.8GB）。`tests/test_desktop_heavy_deps_contract.py` 静态校验这一点。
 /// ★ 注意 `sentence-transformers` 是**连字符**（发行名）；其 Python 导入名是下划线形式。
 const HEAVY_DEPS: [&str; 3] = ["torch", "FlagEmbedding", "sentence-transformers"];
+
+/// 统一的子进程构造入口：Windows 上附加 `CREATE_NO_WINDOW`（**隐藏黑窗**）；
+/// 其他平台等价于 `Command::new`。
+///
+/// ★ 2026-10-08（用户实测反馈"打开 App 就弹出一个控制台窗口"）：
+///   App 是 GUI 子系统进程（自己没有控制台），而 `python.exe` / `uv.exe` 是**控制台子系统**程序
+///   ⇒ 不加此标志时 Windows 会为子进程**自动分配一个新控制台窗口**。
+///   开发期靠它看首启日志尚可，正式版必须隐藏（日志已有各自的落盘去处：
+///   后端 → `data/logs/app.log`；uv 同步 → `data/logs/uv-sync.log`）。
+///   ★ 必须**逐处**使用：本文件共有三处 spawn（能力探针 / uv 同步 / 后端 sidecar），
+///     漏掉任何一处都会各弹一个窗（探针与 uv 的还会一闪而过，更难归因）。
+fn hidden_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    let mut cmd = Command::new(program);
+    #[cfg(windows)]
+    {
+        // GUI 进程 spawn 控制台程序时 Windows 自动分配新控制台；该标志让子进程不创建控制台。
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
+/// 把捆绑的 Portable Python **安置到稳定路径**（`<数据根>/python`），返回该目录下的 `python.exe`。
+///
+/// ★★ 2026-10-08 P0：为什么不能直接用 App 目录里的捆绑 python —— 见 `choose_uv_python`。
+/// 简言之：解释器**路径**是 uv 判定"要不要重建 venv"的依据，而 App 目录随
+/// debug/release/安装位置变化；放到数据根下（用户选定后稳定）才能钉死解释器身份。
+///
+/// 版本标记 `.bundled-fingerprint`：记录**源侧** `python.exe` 的 len+mtime。
+/// 与标记一致 ⇒ 直接复用（零拷贝）；不一致/缺失 ⇒ 重拷（此时捆绑 python 真升级了，
+/// uv 因此重建 venv 反而是**正确**行为）。任何失败都返回 `None`，由调用方退回捆绑路径。
+fn ensure_stable_python(src: &Path, dst: &Path) -> Option<PathBuf> {
+    let src_py = src.join("python.exe");
+    if !src_py.is_file() {
+        eprintln!("[desktop] bundled python missing at {:?}", src_py);
+        return None;
+    }
+    let fp = match fs::metadata(&src_py) {
+        Ok(m) => {
+            let secs = m
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            format!("{}:{}", m.len(), secs)
+        }
+        Err(e) => {
+            eprintln!("[desktop] cannot stat bundled python: {}", e);
+            return None;
+        }
+    };
+    let dst_py = dst.join("python.exe");
+    let marker = dst.join(".bundled-fingerprint");
+    let cur = fs::read_to_string(&marker).ok();
+    if dst_py.is_file() && cur.map(|s| s.trim().to_string()).as_deref() == Some(fp.as_str()) {
+        return Some(dst_py);
+    }
+    if let Err(e) = copy_dir_all(src, dst) {
+        eprintln!("[desktop] stable python copy failed: {}", e);
+        return None;
+    }
+    let _ = fs::write(&marker, format!("{fp}\n"));
+    if dst_py.is_file() {
+        Some(dst_py)
+    } else {
+        None
+    }
+}
+
+// （目录递归复制复用本文件已有的 `copy_dir_all`（迁移逻辑在用，见文件下方），此处不再重复定义。）
+
+/// 决定 `uv sync` 用哪个解释器（`--python`）—— **这一步直接决定 venv 会不会被重建**。
+///
+/// ★★ 2026-10-08 P0（真机实测根因）：uv 认定"目标解释器"的依据是**路径**。
+///   原实现直接传 `<App>/resources/python/python.exe`，而该路径**随 App 位置变化**
+///   （`target/debug` → `target/release` → 安装目录三者互不相同）。
+///   路径一变，uv 就认为"现有环境基于另一个解释器" ⇒ **删除并重建 venv** ⇒
+///   用户点「准备运行环境」装好的 torch / FlagEmbedding / sentence-transformers（~4GB）
+///   被**整体清空**，真实语义检索静默失效。实测证据：venv 体积 **4776MB→684MB**、
+///   `pyvenv.cfg` 的 `home` 被改写为新 App 目录、报错为 `ModuleNotFoundError: FlagEmbedding`。
+///   ⚠️ `--inexact` **防不住**这种情况 —— 它只防"剪掉多余包"，防不住"环境重建"
+///   （新环境里没有任何包可保）。
+///
+/// 选取顺序：
+///   ① venv 已存在、且其基础解释器目录仍然在世（读 `pyvenv.cfg` 的 `home`）
+///      ⇒ **用它自己的解释器**（与现有环境天然同源 ⇒ uv 不会重建）；
+///   ② 否则用 `<数据根>/python/python.exe`（`ensure_stable_python` 安置的**稳定副本**）；
+///   ③ 安置失败时 `stable_python` 已是捆绑路径（保底，绝不阻断启动）。
+fn choose_uv_python(venv_python: &Path, venv_dir: &Path, stable_python: &Path) -> PathBuf {
+    if venv_python.is_file() && venv_base_alive(venv_dir) {
+        return venv_python.to_path_buf();
+    }
+    stable_python.to_path_buf()
+}
+
+/// venv 的 `pyvenv.cfg` 里 `home = <基础解释器目录>` 是否仍然存在。
+/// 不存在（装到新目录、旧安装目录已被删除等）⇒ 该 venv 的解释器已不可用，
+/// 必须换解释器（此时 uv 正常重建，是**正确**行为）。
+fn venv_base_alive(venv_dir: &Path) -> bool {
+    fs::read_to_string(venv_dir.join("pyvenv.cfg"))
+        .ok()
+        .and_then(|s| {
+            s.lines().find_map(|l| {
+                l.trim()
+                    .strip_prefix("home")
+                    .map(|r| r.trim_start_matches([' ', '=', '\t']).trim().to_string())
+            })
+        })
+        .map(|home| Path::new(&home).is_dir())
+        .unwrap_or(false)
+}
 
 /// 「依赖已装好」标记文件（与 `venv` / `uv-cache` 并列在 App 数据目录下）。
 ///
@@ -91,7 +204,7 @@ fn deps_fingerprint(backend_dir: &std::path::Path) -> String {
 ///   后者在导入期就执行 `create_app()`，会带来建库/建目录等副作用，不适合当探针。
 ///   实测两个包的 `__init__.py` 都是空文件 ⇒ 零副作用。
 fn probe_backend_imports(venv_python: &std::path::Path, cwd: &std::path::Path) -> bool {
-    let out = Command::new(venv_python)
+    let out = hidden_command(venv_python)
         .current_dir(cwd)
         .args(["-c", "import fastapi, sqlalchemy, papermate, lightcore"])
         .output();
@@ -758,6 +871,17 @@ fn bootstrap_and_spawn(app: &tauri::AppHandle) {
     let uv_cache_dir = dir_or_env("UV_CACHE_DIR", data_root.join("uv-cache"));
     let venv_python = venv_dir.join("Scripts").join("python.exe");
 
+    // ★★ 2026-10-08 P0：把捆绑 Portable Python 安置到**数据根下的稳定路径**（`<root>/python`），
+    //   供 `uv sync --python` 使用。原实现直接指向 App 目录下的捆绑 python，
+    //   而该路径随 App 位置变化（debug/release/安装目录）⇒ uv 判定"解释器变了" ⇒
+    //   **重建 venv** ⇒ 用户装好的 ~4GB 重依赖被整体清空（完整根因见 choose_uv_python）。
+    //   失败时退回捆绑路径（保底，绝不阻断启动）。
+    let stable_python = ensure_stable_python(
+        &res_dir.join("resources").join("python"),
+        &data_root.join("python"),
+    )
+    .unwrap_or_else(|| python_exe.clone());
+
     if let Err(e) = fs::create_dir_all(&data_dir) {
         eprintln!("[desktop] cannot create data_dir {:?}: {}", data_dir, e);
         show_startup_error(app, &format!("无法创建数据目录：{}\n{}", data_dir.display(), e));
@@ -835,25 +959,35 @@ fn bootstrap_and_spawn(app: &tauri::AppHandle) {
             "--extra".to_string(),
             "rag".to_string(),
             "--frozen".to_string(),
-            // ★★ `--inexact` = **绝不删除环境里已有的"多余"包**，这是本段的安全阀。
+            // ★★ `--inexact` = **绝不删除环境里已有的"多余"包**（第一道安全阀）。
             //    为什么必须有：本段用 `--no-install-package` 排除了 torch 等重依赖，
             //    而 `uv sync` 默认是**精确模式**（会剪掉不在期望集合里的包）。
-            //    一旦用户点过「准备运行环境」补装好 4.0GB 的 torch/CUDA，
-            //    此后本段**只要再跑到一次**（例如 App 升级换了 uv.lock 指纹），
-            //    精确模式就会把刚下好的 4GB **剪掉** ⇒ 真实语义检索静默失效，
-            //    而用户只看到"又变回假检索了"，极难定位。
             //    `uv sync --help` 原文（已核对包内 uv 0.12.23）：
             //      `--inexact  Do not remove extraneous packages present in the environment`
+            //    ⚠️ 但它**防不住"环境被整体重建"**（新环境里没有任何包可保）——
+            //       那一路由 `--python` 的稳定性负责，见 choose_uv_python 的长注释。
             "--inexact".to_string(),
-            // ★ 强制使用捆绑的 Portable Python，避免 uv 联网另下一份 Python
-            "--python".to_string(),
-            python_exe.to_string_lossy().to_string(),
         ];
         for pkg in HEAVY_DEPS.iter() {
             uv_args.push("--no-install-package".to_string());
             uv_args.push(pkg.to_string());
         }
-        match Command::new(&uv_exe)
+        // ★★ 2026-10-08 P0：`--python` 必须走**稳定路径**（取值策略见 choose_uv_python）。
+        //   它仍然是"捆绑的 Portable Python"（只是被安置到数据根下的稳定副本），
+        //   所以**不会**触发 uv 联网另下一份 Python。
+        uv_args.push("--python".to_string());
+        uv_args.push(
+            choose_uv_python(&venv_python, &venv_dir, &stable_python)
+                .to_string_lossy()
+                .to_string(),
+        );
+
+        // ★ 2026-10-08：黑窗已隐藏（hidden_command）⇒ uv 的输出必须落盘，
+        //   否则首启同步失败时**没有任何诊断入口**（此前全靠那个控制台窗口）。
+        let uv_log_path = data_dir.join("logs").join("uv-sync.log");
+        let _ = fs::create_dir_all(data_dir.join("logs"));
+        let mut uv_cmd = hidden_command(&uv_exe);
+        uv_cmd
             .current_dir(&backend_dir)
             .env("UV_PROJECT_ENVIRONMENT", &venv_dir)
             .env("HF_ENDPOINT", "https://hf-mirror.com")
@@ -863,9 +997,20 @@ fn bootstrap_and_spawn(app: &tauri::AppHandle) {
             .env("UV_HTTP_LOW_SPEED_LIMIT", "10")
             // ★ 避开用户全局 uv 缓存（可能含损坏条目，见上面 uv_cache_dir 的说明）
             .env("UV_CACHE_DIR", &uv_cache_dir)
-            .args(uv_args)
-            .status()
+            .args(uv_args);
+        match fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&uv_log_path)
         {
+            Ok(f) => {
+                if let Ok(f2) = f.try_clone() {
+                    uv_cmd.stdout(Stdio::from(f)).stderr(Stdio::from(f2));
+                }
+            }
+            Err(e) => eprintln!("[desktop] cannot open uv log {:?}: {}", uv_log_path, e),
+        }
+        match uv_cmd.status() {
             Ok(s) if s.success() => {}
             Ok(s) => {
                 eprintln!("[desktop] uv sync failed: {}", s);
@@ -923,7 +1068,7 @@ fn bootstrap_and_spawn(app: &tauri::AppHandle) {
     //   `tauri.conf.json` 的 `windows[0].url` 创建好了**（`app.rs::setup` 里先建窗口、
     //   再跑用户的 setup 闭包）。所以窗口此刻显示的是**包内的本地等待页**（`loading.html`），
     //   需要我们在后端就绪后**主动把它导航**到真实 UI —— 见 `navigate_when_backend_ready`。
-    match Command::new(&venv_python)
+    match hidden_command(&venv_python)
         .current_dir(&backend_dir)
         .args(["-m", "papermate.api"])
         .env("PAPERMATE_HOST", HOST)
