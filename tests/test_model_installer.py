@@ -146,9 +146,25 @@ def test_check_free_space_insufficient(monkeypatch, tmp_path):
     assert "磁盘余量不足" in str(ei.value)
 
 
-def test_check_free_space_unreadable_path():
-    with pytest.raises(ModelInstallError):
-        mi.check_free_space(1.0, dirpath="Z:/no-such-drive/x", usage=lambda p: (_ for _ in ()).throw(OSError("no")))
+def test_check_free_space_unreadable_path_is_skipped_not_fatal():
+    """★★ 2026-10-07 契约更新（原 `test_check_free_space_unreadable_path`）。
+
+    **旧契约**：探测失败 ⇒ 抛 `ModelInstallError`（原注释："路径不存在/无权限 → 显式失败而非继续下载"）。
+
+    **为什么改**（真机首装实测）：该契约会**误杀真实下载** —— Windows 上对
+    "刚被 ensure_hf_mirror 创建出来"的 HF 缓存目录调 `shutil.disk_usage`
+    （内部是 `GetDiskFreeSpaceExW`）会抛 `FileNotFoundError`；而此时 4GB 重依赖其实
+    已装完，下载却在权重阶段被这条检查中断 ⇒ `status=error`，
+    UI 表现为"卡在准备运行环境 / 下载失败"。
+
+    **新契约**：**测不出余量 ≠ 余量不足** ⇒ 探测失败只记 warning 并放行（返回 0.0），
+    绝不拦下载；只有"成功测得且确实不足"才拦截（`test_check_free_space_insufficient`
+    仍在、语义未变）。与展示口径 `free_space_gb`（探测失败返回 None、不挂卡片）同源。
+    """
+    def _boom(_p):  # 模拟"探测本身失败"（不可测），而不是"测得不足"
+        raise OSError("no")
+
+    assert mi.check_free_space(1.0, dirpath="Z:/no-such-drive/x", usage=_boom) == 0.0
 
 
 # ───────────────────────── 4. 安装状态探测 ─────────────────────────

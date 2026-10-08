@@ -181,20 +181,44 @@ def test_startup_page_exposes_first_run_hooks():
     assert "if (!firstRun)" in html, "首启面板显示期间不应被 tick() 覆盖标题"
 
 
-def test_startup_page_needs_no_ipc_and_no_capability():
-    """★ 设计要点：用户操作发生在**原生对话框**里 ⇒ 页面**不需要** JS→Rust IPC。
+def test_startup_page_ipc_is_covered_by_capability():
+    """★★ 2026-10-07 契约更新（原 `test_startup_page_needs_no_ipc_and_no_capability`）。
 
-    这条如果被破坏（例如有人加了 `window.__TAURI__.invoke`），就必须同时补
-    `app.withGlobalTauri=true` **和** capability —— 否则调用静默失败。
+    **旧契约**（写于"等待页纯展示"的年代）：等待页不得出现 `__TAURI__`，
+    且 `withGlobalTauri` 必须为 false —— 因为**当时本仓库没有 capability 文件**，
+    开了它只会让 JS→Rust 调用静默失败。
+
+    **为什么改**（两处有意演进，均已真机验证）：
+    ① 等待页新增「关闭窗口」按钮（后端卡死时用户能退出，而不是只能杀进程）——
+       走**核心 IPC** `window.__TAURI_INTERNALS__`（任何 webview 必注入），
+       **刻意不用** `window.__TAURI__` 命名空间（远程页上不可靠 —— 这正是顶条按钮
+       两次"点了没反应"的根因）；
+    ② 真实 UI 由后端伺服（`http://127.0.0.1:8000`，**远程源**）⇒ 必须开
+       `withGlobalTauri` **并**配 capability（含 `remote.urls` 显式覆盖该源），
+       否则页面级 IPC 会被 ACL **静默拒绝**。
+
+    **新契约（真正的不变量）**：允许用 IPC，但必须有"授权"——
+    ① 等待页若用 IPC 只准核心 INTERNALS，不得依赖 `window.__TAURI__.` 命名空间；
+    ② 一旦开启 `withGlobalTauri`，`capabilities/` 必须存在且覆盖 main 窗口与
+       `127.0.0.1:8000` 远程源（覆盖不全 = 静默失败重演）。
     """
     html = _startup_page().read_text(encoding="utf-8")
-    assert "__TAURI__" not in html, (
-        "等待页不应依赖 Tauri IPC —— 用户操作在原生对话框里，页面只负责展示"
+    assert "window.__TAURI__." not in html, (
+        "等待页不得使用 `window.__TAURI__.` 命名空间（远程页/早期帧不可靠）；"
+        "核心 IPC 请用 `window.__TAURI_INTERNALS__`"
     )
     cfg = json.loads((_TAURI_DIR / "tauri.conf.json").read_text(encoding="utf-8"))
-    assert not cfg.get("app", {}).get("withGlobalTauri"), (
-        "本项目没有 capability 文件；若开启 withGlobalTauri 而不配 capability，"
-        "任何 JS→Rust 调用都会静默失败"
+    if not cfg.get("app", {}).get("withGlobalTauri"):
+        return  # 未开启全局注入 ⇒ 无须 capability（旧契约同样合法）
+    caps = sorted((_TAURI_DIR / "capabilities").glob("*.json"))
+    assert caps, (
+        "开启了 withGlobalTauri 却没有 capability 文件 ⇒ 任何 JS→Rust 调用都会静默失败"
+    )
+    merged = "\n".join(p.read_text(encoding="utf-8") for p in caps)
+    assert '"main"' in merged, 'capability 必须覆盖 main 窗口（windows: ["main"]）'
+    assert "127.0.0.1:8000" in merged, (
+        "真实 UI 是远程源（http://127.0.0.1:8000）⇒ capability 的 remote.urls 必须显式覆盖它；"
+        "否则页面级 IPC 被 ACL 静默拒绝（2026-10-07 实测根因）"
     )
 
 
@@ -254,3 +278,53 @@ def test_pending_request_is_cleared_on_both_success_and_failure():
 def test_backend_receives_the_settings_path():
     """★ 后端必须知道配置文件在哪 —— 数据目录可能已搬到别处，它无法从 `data_dir` 反推。"""
     assert '.env("PAPERMATE_APP_SETTINGS"' in _LIB, "未向后端注入 PAPERMATE_APP_SETTINGS"
+
+
+# ─────────── 7. 控制台黑窗 + venv 重建防护（2026-10-08 真机反馈后追加）───────────
+def test_all_child_processes_hide_console_window():
+    """★★ GUI 进程 spawn 控制台子系统程序（python.exe / uv.exe）时，Windows 会**自动分配
+    一个新的控制台窗口** —— 用户表现为"一打开 App 就弹出一个黑窗"（2026-10-08 真机反馈）。
+
+    修法：三处 spawn（能力探针 / uv 同步 / 后端 sidecar）必须**全部**走 `hidden_command()`
+    （Windows 上附加 `CREATE_NO_WINDOW`；日志改落 app.log / uv-sync.log）。
+
+    ★ 为什么要求"一处不漏"而不是"存在 hidden_command 即可"：漏掉任何一处都会各弹一个窗，
+      而探针与 uv 的窗口**一闪而过**，用户只会说"有时候会闪一下"，极难归因 ⇒ 用
+      "全文只允许出现一次裸 `Command::new`（即 hidden_command 内部那一处）"来钉死。
+    """
+    body = _fn_body("hidden_command", "\nfn ")
+    assert "creation_flags" in body, "hidden_command 未设置 creation_flags（黑窗会复现）"
+    assert body.count("Command::new(") == 1, "hidden_command 内部应恰好构造一次 Command"
+    total = _LIB.count("Command::new(")
+    assert total == 1, (
+        f"除 hidden_command 外仍有 {total - 1} 处裸 `Command::new` —— 这些 spawn 会各自弹控制台；"
+        "请统一改用 `hidden_command()`"
+    )
+
+
+def test_uv_python_path_is_stable_across_app_moves():
+    """★★ 2026-10-08 P0：`uv sync --python` 必须走**稳定路径**。
+
+    真机实测根因：uv 认定"目标解释器"的依据是**路径**。原实现直接传
+    `<App>/resources/python/python.exe`，而该路径随 App 位置变化
+    （`target/debug` → `target/release` → 安装目录）⇒ uv 判定"环境基于另一个解释器"
+    ⇒ **删除并重建 venv** ⇒ 用户点「准备运行环境」装好的 torch / FlagEmbedding /
+    sentence-transformers（~4GB）被**整体清空**（实测 venv 4776MB→684MB、
+    `pyvenv.cfg` 的 `home` 被改写、报 `ModuleNotFoundError: FlagEmbedding`）。
+    ⚠️ `--inexact` **防不住**这条路 —— 它只防"剪掉多余包"，防不住"环境重建"。
+
+    不变量：① `choose_uv_python` 用 `pyvenv.cfg` 的 `home` 判 venv 基底是否在世；
+            ② `bootstrap_and_spawn` 里 `--python` 的值来自 `choose_uv_python`，
+               **不得**再把捆绑 python 的路径直接塞给 uv；
+            ③ 稳定副本安置在数据根下（`data_root.join("python")`）。
+    """
+    body = _fn_body("choose_uv_python", "\nfn ")
+    assert "venv_python" in body and "stable_python" in body, "choose_uv_python 的选取策略丢了"
+    alive = _fn_body("venv_base_alive", "\nfn ")
+    assert "pyvenv.cfg" in alive and "home" in alive, "venv_base_alive 未按 pyvenv.cfg 的 home 判活"
+    boot = _fn_body("bootstrap_and_spawn", None)
+    assert "choose_uv_python(" in boot, "bootstrap_and_spawn 未使用 choose_uv_python"
+    assert 'data_root.join("python")' in boot, "稳定 python 未安置在数据根下"
+    assert "python_exe.to_string_lossy()" not in boot, (
+        "仍把捆绑 python 的**路径**直接传给 uv —— 该路径随 App 位置变化，会触发 venv 重建"
+    )
