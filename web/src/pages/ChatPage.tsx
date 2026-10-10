@@ -11,6 +11,7 @@ import { useSettings } from "../store/settings";
 // 而面板里只有一句 `export { docLabel } from "../lib/docLabel"` —— 从它引入会把**整个面板模块**
 // （连带 `pdfjs-dist`）拉进 ChatPage 的静态图，使"面板下沉为 lazy"失效。
 import { docLabel } from "../lib/docLabel";
+import { saveBlob as saveFileBlob } from "../lib/saveFile";
 import { PdfReader } from "../components/PdfReader";
 import { TraceTimeline } from "../components/TraceTimeline";
 import { MemoryPanel } from "../components/MemoryPanel";
@@ -426,17 +427,18 @@ export function ChatPage({
       const c = await api.exportTraceCase(trace.trace_id);
       const line = JSON.stringify(c, null, 0);
       const blob = new Blob([line + "\n"], { type: "application/x-ndjson" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `case-${trace.trace_id}.jsonl`;
-      a.click();
-      URL.revokeObjectURL(url);
-      setExportNote(
-        c.candidates.length
-          ? `已导出（${c.candidates.length} 个候选块，gold 需人工补）`
-          : "已导出（该轮未检索到文档）",
-      );
+      const note = c.candidates.length
+        ? `已导出（${c.candidates.length} 个候选块，gold 需人工补）`
+        : "已导出（该轮未检索到文档）";
+      // ★ P-05（2026-10-09）：桌面端走「原生另存为 + 后端写盘 + 明确路径」；浏览器回退 <a download>。
+      const out = await saveFileBlob(`case-${trace.trace_id}.jsonl`, blob);
+      if (out.kind === "cancelled") {
+        // 用户取消另存为：不打扰
+      } else if (out.kind === "saved") {
+        setExportNote(`${note} · 已保存到 ${out.path}`);
+      } else {
+        setExportNote(`${note} · 已开始下载（保存到「下载」文件夹）`);
+      }
     } catch (e) {
       setExportNote(`导出失败：${e instanceof Error ? e.message : String(e)}`);
     } finally {

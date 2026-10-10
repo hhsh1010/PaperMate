@@ -489,6 +489,21 @@ export interface FigureEnrichDeps {
   vlm: boolean;
 }
 
+/** 图片增强依赖（`[figure]` extra）的**按需安装**状态（2026-10-09）。
+ *  ★ 只有"装包"一段（uv sync --extra figure），无模型下载段——PP-OCR 权重由
+ *  paddleocr 首次使用时自行下载。 */
+export interface FigureInstallStatus {
+  status: "idle" | "running" | "success" | "cancelled" | "error";
+  message: string;
+  error: string | null;
+  started_at: number | null;
+  finished_at: number | null;
+  /** 已耗时（秒，后端按 started_at→now 计算） */
+  elapsed_s: number;
+  /** 安装结束后的三能力快照（运行中为 null）；前端据此直接刷新"已装/未装" */
+  deps: FigureEnrichDeps | null;
+}
+
 /** P1-2.1 回复核验：单条问题（只读展示，不改写回复） */
 export interface VerifyIssue {
   severity: "ok" | "warn" | "suspect";
@@ -797,17 +812,21 @@ export interface RagModelsOut {
 export interface RagInstallStatus {
   status: "idle" | "running" | "success" | "cancelled" | "error";
   /** ★ 两阶段：deps（装重依赖约 4GB）→ models（下权重约 4.5GB）。
-   *  桌面首装 deps_ready=false ⇒ 第一次点「下载」先跑 deps 段。
-   *  ⚠️ deps 段**没有文件级进度**（uv 不上报），percent 在该段不可信 ⇒ 展示为不确定进度条。 */
+   *  桌面首装 deps_ready=false ⇒ 第一次点「下载」先跑 deps 段。 */
   phase: "deps" | "models" | null;
   models: string[];
   current: string | null;
   current_file: string | null;
   file_index: number;
   file_total: number;
-  /** ⚠️ **文件数进度**（非字节进度）：单个 2GB 权重在下完之前这一档不会跳，
-   *  前端文案请写成「正在下载第 i/N 个文件」，不要用它驱动百分比条。 */
+  /** ★ P-01（2026-10-09）：**阶段内合成百分比**（deps 按字节增量估；models 优先按字节，
+   *  无字节分母时才退回文件数）。**用它驱动进度条前先看 total_bytes**。 */
   percent: number;
+  /** ★ P-01：真字节进度。`total_bytes > 0` ⇒ 可用百分比条（两段都行）；
+   *  `total_bytes === 0` ⇒ **信号不可用**（热缓存增量≈0 / 元数据缺失）⇒ 保持不确定动画，
+   *  **不要**把 0 当成 0%（那是"假装有进度"）。 */
+  done_bytes: number;
+  total_bytes: number;
   message: string;
   error: string | null;
   elapsed_s: number;

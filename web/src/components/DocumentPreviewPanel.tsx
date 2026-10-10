@@ -5,6 +5,7 @@ import { getDocument, GlobalWorkerOptions } from "pdfjs-dist";
 // pdf.js worker：用 Vite ?url 引入产物，避免构建期动态 import worker 失败
 import workerUrl from "pdfjs-dist/build/pdf.worker.mjs?url";
 import { Icons } from "../lib/icons";
+import { saveBlob as saveFileBlob, saveOutcomeMessage } from "../lib/saveFile";
 import { DocxRender } from "./DocxRender";
 import { useCtrlWheelZoom } from "../lib/useCtrlWheelZoom";
 import { toErrorMessage } from "../lib/error";
@@ -287,16 +288,19 @@ export function DocumentPreviewPanel({
     return () => clearTimeout(t);
   }, [exportMsg]);
 
-  /** Blob → 浏览器下载（临时 <a download>，用后即焚） */
+  /** ★ P-05（2026-10-09）：统一走 lib/saveFile —— 桌面端弹原生「另存为」+ 后端写盘 + 明确路径；
+   *  浏览器端内部回退 <a download>（行为不变）。取消不打扰、失败必须可见。 */
   const saveBlob = (blob: Blob, filename: string) => {
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    void (async () => {
+      try {
+        const out = await saveFileBlob(filename, blob);
+        if (out.kind === "cancelled") return;
+        const msg = saveOutcomeMessage(out);
+        if (msg) setExportMsg({ ok: true, text: msg });
+      } catch (e: unknown) {
+        setExportMsg({ ok: false, text: `导出失败：${toErrorMessage(e) || "未知错误"}` });
+      }
+    })();
   };
 
   /** 导出 Markdown + 引用 = 后端格式转换（GET /export?format=md）+ 头部引用块（来源/ID/时间） */
@@ -329,7 +333,6 @@ export function DocumentPreviewPanel({
         "",
       ].join("\n");
       saveBlob(new Blob([citation + md], { type: "text/markdown;charset=utf-8" }), `${base}.md`);
-      setExportMsg({ ok: true, text: `已导出：${base}.md（含引用头）` });
     } catch (e: unknown) {
       setExportMsg({ ok: false, text: `导出失败：${toErrorMessage(e) || "未知错误"}` });
     } finally {

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { SessionUsageDetail, UsageRow, UsageTrendOut, UsageTrendPoint } from "../lib/types";
 import { api } from "../api/client";
 import { timeAgo } from "../lib/time";
+import { saveBlob as saveFileBlob, saveOutcomeMessage } from "../lib/saveFile";
 import { Icons } from "../lib/icons";
 import { toErrorMessage } from "../lib/error";
 import { MetricsPanel } from "./MetricsPanel";
@@ -100,6 +101,8 @@ export function UsagePanel({ onOpenChat }: { onOpenChat?: (sessionId: number) =>
   const [trendDays, setTrendDays] = useState(30);
   const [trend, setTrend] = useState<UsageTrendOut | null>(null);
   const [trendError, setTrendError] = useState<string | null>(null);
+  /** ★ P-05（2026-10-09）：导出 CSV 的结果提示（取消不打扰、失败可见）。 */
+  const [exportMsg, setExportMsg] = useState<string | null>(null);
 
   useEffect(() => {
     api
@@ -159,12 +162,17 @@ export function UsagePanel({ onOpenChat }: { onOpenChat?: (sessionId: number) =>
     ]);
     const csv = [header, ...body].map((cols) => cols.map(escapeCsv).join(",")).join("\r\n");
     const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `papermate-usage-${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    const name = `papermate-usage-${new Date().toISOString().slice(0, 10)}.csv`;
+    // ★ P-05（2026-10-09）：桌面端走「原生另存为 + 后端写盘 + 明确路径」；浏览器回退 <a download>。
+    void (async () => {
+      try {
+        const out = await saveFileBlob(name, blob);
+        if (out.kind === "cancelled") return;
+        setExportMsg(saveOutcomeMessage(out));
+      } catch (e) {
+        setExportMsg(`导出失败：${e instanceof Error ? e.message : String(e)}`);
+      }
+    })();
   };
 
   const stats = useMemo(() => {
@@ -214,6 +222,7 @@ export function UsagePanel({ onOpenChat }: { onOpenChat?: (sessionId: number) =>
         <button className="usage-export" onClick={exportCsv} disabled={rows.length === 0} title="导出会话用量为 CSV">
           导出 CSV
         </button>
+        {exportMsg && <span className="muted">{exportMsg}</span>}
       </header>
 
       {error && <div className="error-box">{error}</div>}

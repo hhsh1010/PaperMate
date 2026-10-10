@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { saveDocxExport, saveOutcomeMessage } from "../lib/saveFile";
 import { renderAsync } from "docx-preview";
 import { api } from "../api/client";
 import type { ApplyEditsOut, EditOp, ParaAction, ParaTransformOut, StreamItem } from "../lib/types";
@@ -50,6 +51,30 @@ export function RevisionWorkbench({
   /** 文档流条目（两种视图共用数据源：结构模式渲染卡片/表格网格；图文模式用于对齐与 quote） */
   const [streamItems, setStreamItems] = useState<StreamItem[]>([]);
   const [fidLoading, setFidLoading] = useState(false);
+
+  /** ★ P-04（2026-10-09）：另存为导出的进行态（**防重复点击**）+ 结果提示。
+   *  背景：原先两个按钮是 `<a download>`，桌面端（Tauri）静默落盘、界面零反馈
+   *  ⇒ 用户以为无效、连点 12 次（实测）。改为「原生另存为 → 后端写盘 → 明确路径」。 */
+  const [savingDocx, setSavingDocx] = useState<"tracked" | "clean" | null>(null);
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
+
+  const saveAs = useCallback(
+    async (mode: "tracked" | "clean") => {
+      setSavingDocx(mode);
+      setSaveMsg(null);
+      try {
+        const base = docName?.replace(/\.docx$/i, "") || `文档${docId}`;
+        const out = await saveDocxExport(docId, mode, `${base}${mode === "clean" ? "_干净版" : ""}.docx`);
+        setSaveMsg(saveOutcomeMessage(out)); // 取消 ⇒ null（不打扰）
+      } catch (e) {
+        // ★ 失败必须可见（不许静默——与"假装有进度"同族）
+        setSaveMsg(`保存失败：${e instanceof Error ? e.message : String(e)}`);
+      } finally {
+        setSavingDocx(null);
+      }
+    },
+    [docId, docName],
+  );
   const [fidError, setFidError] = useState<string | null>(null);
   const [fidAligned, setFidAligned] = useState<boolean | null>(null);
   /** 图文模式选中的段落（点击注入 pid 的元素） */
@@ -957,21 +982,26 @@ export function RevisionWorkbench({
         </button>
         <span className="rw-hint">应用时自动备份原稿；撤销可反悔</span>
         <span className="rw-spacer" />
-        {/* 原生 <a download>：同源 + 后端 attachment 触发浏览器下载，文件名由 Content-Disposition 提供 */}
-        <a
+        {/* ★ P-04（2026-10-09）：桌面端改「原生另存为 → 后端写盘 → 明确反馈」。
+            原先是原生 <a download>：在 Tauri/WebView2 里静默落盘到系统下载文件夹、界面零反馈
+            ⇒ 实测用户连点 12 次产生 12 个副本。浏览器端由 saveDocxExport 内部回退为下载链接。 */}
+        <button
           className="batch-btn ghost"
-          href={`/api/v1/documents/${docId}/download?mode=tracked`}
-          title="下载带修订痕迹的 .docx（Word 中可继续接受/拒绝修订）"
+          disabled={savingDocx !== null}
+          onClick={() => void saveAs("tracked")}
+          title="另存为带修订痕迹的 .docx（Word 中可继续接受/拒绝修订）"
         >
-          <Icons.download size={12} /> 修订版 .docx
-        </a>
-        <a
+          <Icons.download size={12} /> {savingDocx === "tracked" ? "保存中…" : "修订版 .docx"}
+        </button>
+        <button
           className="batch-btn ghost"
-          href={`/api/v1/documents/${docId}/download?mode=clean`}
-          title="下载接受全部修订后的干净 .docx（可直接投稿/提交）"
+          disabled={savingDocx !== null}
+          onClick={() => void saveAs("clean")}
+          title="另存为接受全部修订后的干净 .docx（可直接投稿/提交）"
         >
-          <Icons.download size={12} /> 干净版 .docx
-        </a>
+          <Icons.download size={12} /> {savingDocx === "clean" ? "保存中…" : "干净版 .docx"}
+        </button>
+        {saveMsg && <span className="rw-hint">{saveMsg}</span>}
       </div>
     </div>
   );

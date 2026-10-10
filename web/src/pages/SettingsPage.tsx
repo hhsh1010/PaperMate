@@ -3,6 +3,7 @@ import { api } from "../api/client";
 import type {
   AppSettings,
   FigureEnrichDeps,
+  FigureInstallStatus,
   InventoryOut,
   ProviderBalance,
   RagInstallStatus,
@@ -33,8 +34,12 @@ const PROVIDERS = [
 const FEATURE_GROUPS: { key: string; title: string; hint: string; open: boolean }[] = [
   { key: "chat", title: "对话与检索", hint: "影响聊天回复质量与检索行为", open: true },
   { key: "doc", title: "文档处理（上传增强）", hint: "上传 / 文档页相关的增强能力", open: false },
+  // ★ P-06 问题 3（2026-10-10）：按**真实入口**归组 —— 改稿三件套此前被拆在两个组
+  //   （revision 在"命令与技能"、para_transform 在"文档处理"、prompt_enhance 在"对话与检索"）。
+  { key: "writing", title: "写作与改稿", hint: "输入框与改稿工作台的写作辅助能力", open: true },
   { key: "skill", title: "命令与技能", hint: "/ 命令触发的复合能力，关闭后回落普通对话", open: true },
-  { key: "exec", title: "执行与评测", hint: "沙箱执行与开发者评测", open: false },
+  // ★ P-06 问题 5：开发者向能力明确标注，不再混在用户设置里
+  { key: "exec", title: "执行与评测（开发者向）", hint: "沙箱执行与开发者评测（普通用户可忽略）", open: false },
 ];
 
 // 功能命名规则（2026-09-05 统一）：用户面向名称 = 「功能名」+ 可选「（入口/形态）」。
@@ -45,11 +50,11 @@ const FEATURES_DEF = [
   { key: "featThinking", group: "chat", label: "思考模式（展示推理链）", hint: "DeepSeek V4 系列开启后展示流式推理链；因官方 thinking 不支持 tool_choice，开启时「绑文档强制检索」自动放宽。" },
   { key: "featVerifyReply", group: "chat", label: "回复逐条核验（L2 语义）", hint: "「引用文本 ↔ 标注页码」的确定性核验（L1）自 2026-09-16 起**始终执行、零成本**；本开关只控制额外的「LLM 语义核验（L2）」：答非所问 / 引用是否支撑结论 / 页码是否明显错误，超时（8s）自动降级。只标「存疑」不自动改写回复。" },
   { key: "featReflectOnAbort", group: "chat", label: "失败轮次自评", hint: "只在「迭代耗尽 / 连续无进展」这类**失败轮次**触发：先做一次自评（限 max_tokens 400、超时 15s；超时或异常一律沿用原兜底内容），若判定「需改进」则带该建议重新收尾一次（仍不给工具，保证收敛）。**正常收敛的对话零额外调用**；自评超时或异常一律沿用原兜底内容，不影响回答。" },
-  { key: "featPromptEnhance", group: "chat", label: "提示词增强", hint: "输入框「增强」按钮：把口语需求改写为更明确的任务描述（单轮元任务，按会话/全局当前模型调用）。关闭后接口返回 403（API 保留）；fake 模型下自动提示不增强。" },
-  { key: "featSummary", group: "doc", label: "一键总结", hint: "对话页右栏文档面板的「结构化总结 / 相关工作 / 对比」入口；关闭后接口返回 403（API 保留）。" },
+  { key: "featPromptEnhance", group: "writing", label: "提示词增强", hint: "输入框「增强」按钮：把口语需求改写为更明确的任务描述（单轮元任务，按会话/全局当前模型调用）。关闭后接口返回 403（API 保留）；fake 模型下自动提示不增强。" },
+  { key: "featSummary", group: "chat", label: "一键总结", hint: "对话页右栏文档面板的「结构化总结 / 相关工作 / 对比」入口；关闭后接口返回 403（API 保留）。" },
   { key: "featDiagramEnrich", group: "doc", label: "结构图识别（多模态）", hint: "上传 PDF 时用 DeepSeek-V4-Flash-Vision 把矢量结构图（架构图/流程图/框图）还原为 Mermaid 源码 + 一句话描述；需先在「模型连接」配置并测试 DeepSeek 密钥，无 key/失败自动降级为空，不影响上传。" },
-  { key: "featParaTransform", group: "doc", label: "段落 AI 改写（改稿工作台）", hint: "改稿工作台选中段落后的扩写/缩写/润色/去重：单轮 LLM 改写生成候选文本，采用即写入文档（track-changes + 自动备份，可撤销）；fake 模型下返回原文不臆造。关闭后接口返回 403（API 保留）。" },
-  { key: "featSkills", group: "skill", label: "★ 技能总开关", hint: "所有命令技能的统一门控；关闭后 / 命令一律回落普通对话。" },
+  { key: "featParaTransform", group: "writing", label: "段落 AI 改写（改稿工作台）", hint: "改稿工作台选中段落后的扩写/缩写/润色/去重：单轮 LLM 改写生成候选文本，采用即写入文档（track-changes + 自动备份，可撤销）；fake 模型下返回原文不臆造。关闭后接口返回 403（API 保留）。" },
+  { key: "featSkills", group: "skill", label: "技能总开关", hint: "所有命令技能的统一门控；关闭后 / 命令一律回落普通对话。" },
   { key: "featPlanning", group: "skill", label: "任务规划（/规划）", hint: "/规划 命令将目标分解为多步计划并逐子任务检索取证；fake 下规则分解。" },
   { key: "featDeepRead", group: "skill", label: "单篇精读（/精读）", hint: "对唯一关联的文档多轮检索后生成结构化精读报告（研究问题/方法/实验/结果/创新/局限）；无 key 时退化为分主题摘录+页码。关闭后 /精读 命令回落普通对话。" },
   { key: "featGlossary", group: "skill", label: "术语表（/术语表）", hint: "从关联文档抽取缩写/术语候选并生成术语表（含释义与首次出现页）；无 key 时退化为候选术语+页码表。关闭后 /术语表 命令回落普通对话。" },
@@ -58,7 +63,7 @@ const FEATURES_DEF = [
   { key: "featExperimentDesign", group: "skill", label: "实验设计（/实验设计）", hint: "从关联文档抽取数据集/指标/基线/协议等实验设置并生成可复现实验方案；无 key 时退化为设置分组+页码。关闭后 /实验设计 命令回落普通对话。" },
   { key: "featReview", group: "skill", label: "审稿（/审稿）", hint: "从关联文档抽取贡献/方法/局限线索并生成结构化审稿意见（含推荐评分）；无 key 时退化为线索分组+页码。关闭后 /审稿 命令回落普通对话。" },
   { key: "featReproduction", group: "skill", label: "复现辅助（/复现）", hint: "从关联文档抽取超参/配置并生成三态复现清单（论文给出/待核实/需从代码补全）；无 key 时退化为候选分组+页码。关闭后 /复现 命令回落普通对话。" },
-  { key: "featRevision", group: "skill", label: "改稿（/改稿）", hint: "把会话关联文档分为「你的论文（草稿）」与「参考文献」：用 /改稿 参数（文件名或文档N）指定草稿，逐节诊断并给出修改建议（原文摘录→问题→建议→参考依据）+ 整体问题清单；无 key 时退化为确定性段落对照。" },
+  { key: "featRevision", group: "writing", label: "改稿（/改稿）", hint: "把会话关联文档分为「你的论文（草稿）」与「参考文献」：用 /改稿 参数（文件名或文档N）指定草稿，逐节诊断并给出修改建议（原文摘录→问题→建议→参考依据）+ 整体问题清单；无 key 时退化为确定性段落对照。" },
   { key: "featCodeInterpreter", group: "exec", label: "代码解释器（沙箱）", hint: "强制 Docker 隔离执行，默认关闭；无 Docker 时明确报错、不会本机直跑。" },
   { key: "featDevEval", group: "exec", label: "开发者评测（/eval）", hint: "/eval 命令读取评测报告与近期 Trace 出指标卡；默认关闭。" },
 ];
@@ -191,6 +196,63 @@ export function SettingsPage() {
   const [featRevision, setFeatRevision] = useState(true);
   const [featFigureEnrich, setFeatFigureEnrich] = useState(false);
   const [enrichDeps, setEnrichDeps] = useState<FigureEnrichDeps | null>(null);
+  /** 图片增强依赖安装（2026-10-09）：`[figure]` extra 的按需下载（paddleocr / 表格结构） */
+  const [figInstall, setFigInstall] = useState<FigureInstallStatus | null>(null);
+  /** ★ 重新检测的进行态（2026-10-10）：原先点了毫无可见反馈，被用户当成"没用" */
+  const [depsChecking, setDepsChecking] = useState(false);
+
+  /** 实时重探测三能力（不做缓存；装完后调用即可拿到真值，无需重启 App）。 */
+  const refreshEnrichDeps = async () => {
+    try {
+      setEnrichDeps(await api.figureEnrichDeps());
+    } catch {
+      /* 单次失败保持旧值，不打扰 */
+    }
+  };
+
+  /** ★ 重新检测（2026-10-10）：带「检测中…」进行态 —— 原先点了零可见反馈，被用户当成"没用"。
+   *  反馈 = ①按钮自身变「检测中…」禁用 ②状态行尾追加「检测中…」③完成后状态行刷新为真值。 */
+  const recheckDeps = async () => {
+    setDepsChecking(true);
+    try {
+      await refreshEnrichDeps();
+    } finally {
+      setDepsChecking(false);
+    }
+  };
+
+  // 安装进行中：每 2s 轮询（与 RAG 安装同款模式）。**结束即重探测**——
+  // 探测是"现场 import"，装完立刻能看到"已装"，不必重启 App（这是 P-06 修复的一部分）。
+  useEffect(() => {
+    if (figInstall?.status !== "running") return;
+    const timer = window.setInterval(async () => {
+      try {
+        const s = await api.figureDepsStatus();
+        setFigInstall(s);
+        if (s.status !== "running") setEnrichDeps(s.deps ?? (await api.figureEnrichDeps()));
+      } catch {
+        /* 轮询的单次失败不打扰用户，下一拍自动重试 */
+      }
+    }, 2000);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [figInstall?.status]);
+
+  const startFigInstall = async () => {
+    try {
+      setFigInstall(await api.installFigureDeps());
+    } catch (e) {
+      setFigInstall({
+        status: "error",
+        message: "启动安装失败",
+        error: String(e),
+        started_at: null,
+        finished_at: null,
+        elapsed_s: 0,
+        deps: null,
+      });
+    }
+  };
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
   const allModels = useMemo(() => {
@@ -333,7 +395,11 @@ export function SettingsPage() {
 
   // 仅在进入「检索增强」分区时拉取（避免每次打开设置页都白打两个请求）
   useEffect(() => {
-    if (activeSec === 8) void refreshRagModels();
+    if (activeSec === 8) {
+      void refreshRagModels();
+      // ★ 图片增强依赖也归入本分区 ⇒ 进入时实时重探测（探测是现场 import，装完即真值）
+      void refreshEnrichDeps();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSec]);
 
@@ -794,32 +860,61 @@ export function SettingsPage() {
         <SectionCard
           title={t("settings.features")}
           subtitle={lang === "zh" ? "控制涉及大模型 API 的模块是否启用（后端开关 + 接口保留）。点击分组名展开/收起。" : "Toggle LLM-related modules (backend switch, API kept)."}
-          badge={`${Object.values(featMap).filter(Boolean).length}/${FEATURES_DEF.length}`}
+          badge={`${
+            FEATURES_DEF.filter((f) =>
+              f.group === "skill" && f.key !== "featSkills"
+                ? featMap.featSkills && featMap[f.key as keyof typeof featMap]
+                : featMap[f.key as keyof typeof featMap],
+            ).length
+          }/${FEATURES_DEF.length}`}
         >
+            {/* ★ P-06 问题 2（2026-10-10）：fake 模型下"开了也不生效"必须有醒目提示 ——
+                实测用户在 fake 下打开开关、试用、发现"没反应" ⇒ 极易误判为 bug（静默失效同族）。 */}
+            {defaultModel === "fake" && (
+              <div className="settings-hint">
+                ⚠ 当前默认模型 = <b>fake（本地演示）</b>：下列依赖真实大模型的能力只会得到占位/降级结果
+                （技能回落、核验跳过、记忆不写入）。请先到「模型连接」配置并测试密钥，再启用这些开关。
+              </div>
+            )}
             {FEATURE_GROUPS.map((g) => {
               const items = FEATURES_DEF.filter((f) => f.group === g.key);
-              const enabled = items.filter((f) => featMap[f.key as keyof typeof featMap]).length;
-              const renderSwitch = (f: (typeof items)[number]) => (
-                <label className="settings-switch" key={f.key}>
-                  <input
-                    type="checkbox"
-                    checked={featMap[f.key as keyof typeof featMap]}
-                    onChange={(e) => featSetters[f.key](e.target.checked)}
-                  />
-                  <span className="switch-track" aria-hidden="true">
-                    <span className="switch-thumb" />
-                  </span>
-                  <span className="switch-text">{f.label}：{featMap[f.key as keyof typeof featMap] ? "启用" : "关闭"}</span>
-                  <span className="settings-hint">{f.hint}</span>
-                </label>
-              );
+              // ★ P-06 问题 1（2026-10-10）：技能总开关关闭 ⇒ 10 个子技能实际全部停用
+              //   （SkillRouter 一律回落普通对话）⇒ 计数必须反映**真实生效数**，而非拨杆位置。
+              const masterOff = g.key === "skill" && !featMap.featSkills;
+              const enabled = masterOff
+                ? 0
+                : items.filter((f) => featMap[f.key as keyof typeof featMap]).length;
+              const renderSwitch = (f: (typeof items)[number]) => {
+                // 子技能随总开关联动：总开关关闭 ⇒ 置灰禁用（保存的值保留，重开总开关即恢复）
+                const gated = g.key === "skill" && f.key !== "featSkills" && !featMap.featSkills;
+                return (
+                  <label className="settings-switch" key={f.key}>
+                    <input
+                      type="checkbox"
+                      checked={featMap[f.key as keyof typeof featMap]}
+                      disabled={gated}
+                      onChange={(e) => featSetters[f.key](e.target.checked)}
+                    />
+                    <span className="switch-track" aria-hidden="true">
+                      <span className="switch-thumb" />
+                    </span>
+                    <span className="switch-text">
+                      {f.label}：{featMap[f.key as keyof typeof featMap] ? "启用" : "关闭"}
+                      {gated ? "（已随总开关停用）" : ""}
+                    </span>
+                    <span className="settings-hint">{f.hint}</span>
+                  </label>
+                );
+              };
               return (
                 <details key={g.key} className="feat-group" open={g.open}>
                   <summary>
                     <span className="fg-chevron" aria-hidden="true"><Icons.chevronRight size={14} /></span>
                     <span className="fg-title">{g.title}</span>
                     <span className="fg-hint">{g.hint}</span>
-                    <span className="fg-count">{enabled}/{items.length} 启用</span>
+                    <span className="fg-count">
+                      {enabled}/{items.length} 启用{masterOff ? "（总开关关闭）" : ""}
+                    </span>
                   </summary>
                   <div className="fg-body">
                     {items.map(renderSwitch)}
@@ -867,7 +962,7 @@ export function SettingsPage() {
                           {enrichDeps
                             ? `扫描件/截图表格的「图片内文字」需 OCR 才能提取。当前依赖：OCR ${enrichDeps.ocr ? "已装" : "未装(paddleocr)"} · 表格结构 ${enrichDeps.table ? "已装" : "未装(transformers/torch)"} · VLM ${enrichDeps.vlm ? "可用" : "不可用"}。` +
                               (featFigureEnrich && !enrichDeps.ocr && !enrichDeps.table
-                                ? "开启后对应能力将自动降级为空，需先安装依赖才真正生效。"
+                                ? "开启后对应能力将自动降级为空——请到「检索增强（RAG 底座）」分区安装依赖。"
                                 : "开启后对后续上传的图片生效（需重新上传文档）。")
                             : "开启后对后续上传的扫描件/截图表格做 OCR 与表格结构还原（需重新上传文档）。"}
                         </span>
@@ -1221,24 +1316,26 @@ export function SettingsPage() {
             {ragInstall && ragInstall.status === "running" ? (
               <div className="reindex-viz" role="status" aria-live="polite">
                 <div className="reindex-bar-track">
-                  {/* deps 段：uv 不上报文件级进度 ⇒ 百分比在此段**不可信** ⇒ 不确定进度条。
-                      假装有进度比没有进度更糟（用户会以为卡住了）。 */}
+                  {/* ★ P-01（2026-10-09）：进度口径升级为**真字节**。
+                      `total_bytes > 0` ⇒ 画确定进度条（deps 量 uv-cache 磁盘增量、models 量模型目录体积）；
+                      `total_bytes === 0` ⇒ 信号不可用（热缓存增量≈0 / 元数据缺失）⇒ **保持不确定动画**。
+                      纪律不变：假装有进度比没有进度更糟（用户会以为卡住了）。 */}
                   <div
-                    className={`reindex-bar${ragInstall.phase === "deps" || ragInstall.file_total === 0 ? " indeterminate" : ""}`}
+                    className={`reindex-bar${ragInstall.total_bytes > 0 ? "" : " indeterminate"}`}
                     style={{
-                      width:
-                        ragInstall.phase === "models" && ragInstall.file_total > 0
-                          ? `${Math.round((Math.min(ragInstall.file_index, ragInstall.file_total) / ragInstall.file_total) * 100)}%`
-                          : "100%",
+                      width: ragInstall.total_bytes > 0 ? `${Math.round(ragInstall.percent)}%` : "100%",
                     }}
                   />
                 </div>
                 <div className="reindex-meta">
                   <span>
                     {ragInstall.message}
-                    {/* 文件数进度只在 models 段有意义 */}
+                    {/* 字节进度（主口径）；文件数降为辅助信息 */}
+                    {ragInstall.total_bytes > 0
+                      ? `（${formatSize(ragInstall.done_bytes / 1048576, undefined, lang)} / ${formatSize(ragInstall.total_bytes / 1048576, undefined, lang)}）`
+                      : ""}
                     {ragInstall.phase === "models" && ragInstall.file_total > 0
-                      ? `（${ragInstall.file_index}/${ragInstall.file_total}）`
+                      ? ` · 第 ${ragInstall.file_index}/${ragInstall.file_total} 个文件`
                       : ""}
                   </span>
                   {ragInstall.elapsed_s > 0 && <span> · {Math.round(ragInstall.elapsed_s)}s</span>}
@@ -1290,6 +1387,67 @@ export function SettingsPage() {
                 {ragInstall.message}
               </span>
             )}
+
+            {/* ★ 图片增强依赖（OCR / 表格结构）—— 2026-10-10 应用户要求移入本分区：
+                这里是「模型与运行环境下载中心」，重依赖下载集中一处；文档处理组保留开关 + 指引。
+                `[figure]` extra 与 `[rag]` 分离（pyproject），此前无安装入口 ⇒ OCR 装了也不生效。 */}
+            <div className="settings-field">
+              <span className="settings-label">图片增强依赖（OCR / 表格结构）</span>
+              {/* ★ 2026-10-10：状态行必须在本卡片内可见（原先只在「文档处理」的开关提示里，
+                  用户在本卡片点「重新检测」看不到任何变化 ⇒ 被当成"没用"）。 */}
+              <div className="settings-hint">
+                {enrichDeps
+                  ? `当前依赖：OCR ${enrichDeps.ocr ? "已装" : "未装"} · 表格结构 ${enrichDeps.table ? "已装" : "未装"} · VLM ${enrichDeps.vlm ? "可用" : "不可用"}`
+                  : "依赖状态未知"}
+                {depsChecking && " · 检测中…"}
+              </div>
+              <div className="settings-hint">
+                {figInstall?.status === "running" ? (
+                  <>
+                    {figInstall.message}
+                    {figInstall.elapsed_s > 0 && <> · {Math.round(figInstall.elapsed_s)}s</>}{" "}
+                    <button
+                      type="button"
+                      className="settings-btn-ghost"
+                      onClick={() => {
+                        void api.cancelFigureDeps().then(setFigInstall);
+                      }}
+                    >
+                      取消
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    {/* ★ 与 RAG 安装按钮同款语义：缺什么显示「安装依赖」；全齐显示「已全部就绪」（禁用）——
+                        保证**任何状态下都有一个可见按钮**（原先全装好时按钮整个消失，用户找不到"下载按钮"）。 */}
+                    {enrichDeps && !(enrichDeps.ocr && enrichDeps.table) ? (
+                      <button type="button" className="btn-secondary" onClick={() => void startFigInstall()}>
+                        安装依赖（下载约 150~250MB · 落盘约 550MB）
+                      </button>
+                    ) : (
+                      <button type="button" className="btn-primary" disabled>
+                        已全部就绪
+                      </button>
+                    )}{" "}
+                    <button type="button" className="settings-btn-ghost" disabled={depsChecking} onClick={() => void recheckDeps()}>
+                      {depsChecking ? "检测中…" : "重新检测"}
+                    </button>
+                  </>
+                )}
+              </div>
+              {figInstall?.status === "success" && <span className="settings-hint">✓ {figInstall.message}</span>}
+              {figInstall?.status === "cancelled" && <span className="settings-hint">{figInstall.message}</span>}
+              {figInstall?.status === "error" && (
+                <span className="settings-hint">
+                  ✗ {figInstall.error ?? figInstall.message}（详见 data/logs/app.log）
+                </span>
+              )}
+              <span className="settings-hint">
+                扫描件/截图里的文字需 OCR 才能进检索语料（安装后到「文档处理」打开「图片增强」开关，
+                并<b>重新上传文档</b>）。安装走 App 自带 uv 与数据根缓存（已下载部分自动复用，可重试）；
+                若尚未「准备运行环境」，会一并补齐 torch 等重依赖（约 4GB）。
+              </span>
+            </div>
 
             <label className="settings-field">
               <span className="settings-label">{lang === "zh" ? "嵌入模式（Embedding）" : "Embedding mode"}</span>

@@ -14,6 +14,8 @@ import type {
   EvalSummary,
   FeedbackOut,
   FeedbackSummaryOut,
+  FigureEnrichDeps,
+  FigureInstallStatus,
   InventoryOut,
   StorageOut,
   StorageUpdateIn,
@@ -545,6 +547,53 @@ export const api = {
 
   async ragInstallStatus(): Promise<RagInstallStatus> {
     return json(await fetch(`${BASE}/settings/rag/models/install/status`));
+  },
+
+  // ---- 图片增强依赖（按需安装，2026-10-09）----
+  /** 实时探测三能力（不做缓存）——设置页进入 / 安装完成后调用 */
+  async figureEnrichDeps(): Promise<FigureEnrichDeps> {
+    return json(await fetch(`${BASE}/settings/figure-enrich/deps`));
+  },
+
+  async installFigureDeps(): Promise<FigureInstallStatus> {
+    return json(await fetch(`${BASE}/settings/figure-enrich/install`, { method: "POST" }));
+  },
+
+  async cancelFigureDeps(): Promise<FigureInstallStatus> {
+    return json(await fetch(`${BASE}/settings/figure-enrich/install/cancel`, { method: "POST" }));
+  },
+
+  async figureDepsStatus(): Promise<FigureInstallStatus> {
+    return json(await fetch(`${BASE}/settings/figure-enrich/install/status`));
+  },
+
+  // ---- 「另存为」落盘（P-04/P-05，2026-10-09）----
+  // 桌面端不能用浏览器下载（静默落盘、零反馈）⇒ 前端弹原生「另存为」拿到路径后，
+  // 把**写盘**交给后端（只写不读；路径必须来自用户自己的对话框）。
+  /** 文档导出件写到用户选定的路径（修订版 / 干净版 docx）。 */
+  async exportDocumentTo(
+    docId: number,
+    dest: string,
+    mode: "tracked" | "clean",
+  ): Promise<{ path: string; bytes: number }> {
+    return json(
+      await fetch(`${BASE}/documents/${docId}/export-to`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dest, mode }),
+      }),
+    );
+  },
+
+  /** 前端生成的字节写到用户选定的路径（CSV / JSONL / Markdown；base64 传输）。 */
+  async writeLocalFile(dest: string, contentB64: string): Promise<{ path: string; bytes: number }> {
+    return json(
+      await fetch(`${BASE}/files/write`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dest, content_b64: contentB64 }),
+      }),
+    );
   },
 
   async getSettings(): Promise<AppSettings> {

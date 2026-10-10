@@ -93,11 +93,25 @@ function renderBlock(b: MdBlock, key: number): ReactNode {
               type="button"
               className="md-copy-btn"
               title="复制原始 Markdown 表格"
-              onClick={() => {
+              onClick={(e) => {
+                const btn = e.currentTarget;
+                const fail = () => {
+                  btn.title = "复制失败（剪贴板不可用）";
+                };
                 try {
-                  void navigator.clipboard?.writeText(b.raw);
+                  navigator.clipboard?.writeText(b.raw).then(
+                    () => {
+                      // ★ P-05：补"已复制"反馈（原先成功也毫无提示）
+                      const old = btn.title;
+                      btn.title = "已复制";
+                      window.setTimeout(() => {
+                        btn.title = old;
+                      }, 1500);
+                    },
+                    fail,
+                  );
                 } catch {
-                  /* 剪贴板不可用（非 https/localhost）时静默降级 */
+                  fail();
                 }
               }}
             >

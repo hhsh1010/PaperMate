@@ -53,6 +53,8 @@ export const ChatMessageView = memo(function ChatMessageView({
   myRating?: number;
 }) {
   const [copied, setCopied] = useState(false);
+  /** ★ P-05（2026-10-09）：复制失败必须可见（原先静默）。 */
+  const [copyFailed, setCopyFailed] = useState(false);
 
   /** 时间戳展示：HH:MM（历史为后端 created_at，实时为本地时刻）；无值/非法 → 空串不渲染 */
   const fmtTime = (iso?: string | null) => {
@@ -65,9 +67,11 @@ export const ChatMessageView = memo(function ChatMessageView({
     try {
       await navigator.clipboard.writeText(text);
       setCopied(true);
+      setCopyFailed(false);
       window.setTimeout(() => setCopied(false), 1500);
     } catch {
-      /* 剪贴板不可用时静默失败，不阻断阅读 */
+      setCopyFailed(true);
+      window.setTimeout(() => setCopyFailed(false), 2000);
     }
   };
 
@@ -250,7 +254,7 @@ export const ChatMessageView = memo(function ChatMessageView({
             <button
               type="button"
               className="msg-action"
-              title={copied ? "已复制" : "复制"}
+              title={copied ? "已复制" : copyFailed ? "复制失败（剪贴板不可用）" : "复制"}
               aria-label="复制消息"
               onClick={() => copyText(m.text)}
             >
