@@ -236,6 +236,8 @@ def _new_ins_run(text: str, author: str, ts: str, rev_id: int, rpr_src: Any | No
     N15（2026-09-12）：新增 ``rpr_src``——传入一个原 ``w:r`` 元素时，**深拷贝其 <w:rPr>**
     到新 run，使插入文字继承原字符格式（字体/字号/加粗等）。此前不带格式 → 整段替换后
     新文字退化为默认字体，用户实测「改一段文字整段都变格式」。
+    ★ 2026-10-10：``rpr_src`` 也可直接传 ``w:rPr`` 元素（如段落的 ``w:pPr/w:rPr`` 段落标记
+    格式，供"段尾追加"继承）——按 tag 判别，两种约定并存。
     """
     ins = OxmlElement("w:ins")
     ins.set(qn("w:id"), str(rev_id))
@@ -243,7 +245,7 @@ def _new_ins_run(text: str, author: str, ts: str, rev_id: int, rpr_src: Any | No
     ins.set(qn("w:date"), ts)
     r = OxmlElement("w:r")
     if rpr_src is not None:
-        src_rpr = rpr_src.find(qn("w:rPr"))
+        src_rpr = rpr_src if rpr_src.tag == qn("w:rPr") else rpr_src.find(qn("w:rPr"))
         if src_rpr is not None:
             import copy
 
@@ -381,7 +383,9 @@ def _replace_preserving_runs(p_el: Any, text: str, author: str, ts: str, base_id
     3. equal 段**保留原 run 原样**（部分覆盖时用裁剪克隆），replace/delete 段把旧文字
        以裁剪克隆包 ``<w:del>``（保留痕迹），replace/insert 的新文字以 ``<w:ins>`` 写入
        （继承该块第一个被覆盖 run / 前一字符所在 run 的格式）；
-    4. 原位重建：从第一个 run 的位置起按序放入生成序列，未变化的 run 格式与内容零改动。
+    4. 原位替换（★ 2026-10-10）：每个原 run **就地**替换为它的生成块（addprevious + 移除原 run），
+       书签/域等非 run 节点位置一概不动 ⇒ 编辑点之外的文档结构零改变
+       （旧实现把整条序列插回第一个 run 的位置 ⇒ 其后的 run 跨书签边界挪动）。
     """
     from difflib import SequenceMatcher
 
@@ -428,14 +432,19 @@ def _replace_preserving_runs(p_el: Any, text: str, author: str, ts: str, base_id
                 out.append((k, max(s, a), min(e, b)))
         return out
 
-    seq: list[Any] = []
+    # ★ 2026-10-10（用户实测：改稿后书签区内容跨边界挪动 + 插入文字继承上标格式）：
+    #   生成序列改为**按 run 分块（chunks）**：每个原 run 对应一个替换块，重建时**就地**替换
+    #   —— 段内非 run 节点（w:bookmarkStart/End、批注引用等）一概不动，编辑点之外零改变。
+    #   （旧实现把整条 seq 插回"第一个 run 的位置" ⇒ 其后的 run 全部被拉到 bookmarkEnd 之前
+    #     ⇒ 书签覆盖范围被改变——实测"中文作者单位"书签区被掏空。）
+    chunks: list[list[Any]] = [[] for _ in runs]
     rev = base_id
     for tag, i1, i2, j1, j2 in SequenceMatcher(None, old, text).get_opcodes():
         if tag == "equal":
             for k, s, e in _runs_overlapping(i1, i2):
                 clone = _slice_run(k, s, e)
                 if clone is not None:
-                    seq.append(clone)
+                    chunks[k].append(clone)
         elif tag == "replace":
             ovl = _runs_overlapping(i1, i2)
             for k, s, e in ovl:  # 旧文字（该块）裁剪克隆包 <w:del>，保留痕迹
@@ -448,22 +457,33 @@ def _replace_preserving_runs(p_el: Any, text: str, author: str, ts: str, base_id
                     wdel.set(qn("w:author"), author)
                     wdel.set(qn("w:date"), ts)
                     wdel.append(dclone)
-                    seq.append(wdel)
+                    chunks[k].append(wdel)
                     rev += 1
             new_piece = text[j1:j2]
-            rpr_src = runs[ovl[0][0]] if ovl else None
-            seq.append(_new_ins_run(new_piece, author, ts, rev, rpr_src=rpr_src))
+            rpr_src = runs[ovl[-1][0]] if ovl else None
+            chunks[ovl[-1][0]].append(_new_ins_run(new_piece, author, ts, rev, rpr_src=rpr_src))
             rev += 1
         elif tag == "insert":
-            src = None
-            if i1 > 0:
-                for k, (s, e) in enumerate(bnds):
-                    if s <= i1 - 1 < e:
-                        src = runs[k]
-                        break
-            if src is None and runs:
-                src = runs[-1]
-            seq.append(_new_ins_run(text[j1:j2], author, ts, rev, rpr_src=src))
+            # rPr 继承规则（★ 2026-10-10 修后半条）：
+            #   · 段中插入（i1 < len(old)）→ 继承**前一字符所在 run**（延续语义：拆分上标 run
+            #     时新文字同为上标是 Word 的正确行为）；
+            #   · **段落末尾追加**（i1 == len(old)）→ 继承**段落标记**格式（w:pPr/w:rPr）——
+            #     旧实现继承最后一个 run，实测在上标序号"2"后追加作者名被写成上标（用户报告）。
+            if i1 >= len(old):
+                src = p_el.find(f"{qn('w:pPr')}/{qn('w:rPr')}")
+                if src is None and runs:
+                    src = runs[-1]
+            else:
+                src = None
+                if i1 > 0:
+                    for k, (s, e) in enumerate(bnds):
+                        if s <= i1 - 1 < e:
+                            src = runs[k]
+                            break
+                if src is None and runs:
+                    src = runs[-1]
+            k = 0 if i1 == 0 else next(kk for kk, (s, e) in enumerate(bnds) if s <= i1 - 1 < e)
+            chunks[k].append(_new_ins_run(text[j1:j2], author, ts, rev, rpr_src=src))
             rev += 1
         elif tag == "delete":
             for k, s, e in _runs_overlapping(i1, i2):
@@ -476,18 +496,17 @@ def _replace_preserving_runs(p_el: Any, text: str, author: str, ts: str, base_id
                     wdel.set(qn("w:author"), author)
                     wdel.set(qn("w:date"), ts)
                     wdel.append(dclone)
-                    seq.append(wdel)
+                    chunks[k].append(wdel)
                     rev += 1
 
-    if not seq:
+    if not any(chunks):
         return False
-    # 原位重建：移除原 runs，在其首位置按序插入生成序列（保持段落其余部分不动）
-    anchor = runs[0]
-    idx = list(p_el).index(anchor)
-    for r in runs:
-        p_el.remove(r)
-    for offset, elem in enumerate(seq):
-        p_el.insert(idx + offset, elem)
+    # ★ 原位替换（2026-10-10）：每个原 run 就地换成它的生成块（addprevious 后移除原 run）——
+    #   书签/域等非 run 节点的位置一概不动 ⇒ 编辑点之外的文档结构零改变。
+    for k, r in enumerate(runs):
+        for el in chunks[k]:
+            r.addprevious(el)
+        r.getparent().remove(r)
     return True
 
 
@@ -513,7 +532,10 @@ def _apply_one(doc: Document, p: Any, op: str, text: str, author: str, ts: str, 
             rev += 1
         p._p.append(_new_ins_run(text, author, ts, rev, rpr_src=main_rpr_src))
     elif op == "append":
-        p._p.append(_new_ins_run(text, author, ts, base_id))
+        # ★ 2026-10-10：段尾追加继承**段落标记**格式（w:pPr/w:rPr）——旧实现不带 rPr ⇒
+        #   格式化段落（如黑体作者行）里追加的文字退化为默认字体（N15 同族问题）。
+        ppr_rpr = p._p.find(f"{qn('w:pPr')}/{qn('w:rPr')}")
+        p._p.append(_new_ins_run(text, author, ts, base_id, rpr_src=ppr_rpr))
     elif op == "delete":
         # 整段删除：段内全部有效文字（含嵌套 run）逐个标记删除（保留痕迹），段落标记一并标记删除
         rev = base_id

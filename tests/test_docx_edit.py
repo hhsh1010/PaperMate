@@ -17,6 +17,7 @@ import tempfile
 import time
 import zipfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 from docx import Document
@@ -929,3 +930,121 @@ def test_save_baks_meta_keeps_original_on_failure(tmp_path, monkeypatch):
         "写入失败后原栈文件被破坏 ⇒ 历史丢失（O-06 修复点）"
     )
     assert not list(tmp_path.glob("*.tmp")), "失败的 tmp 必须清理（不留垃圾）"
+
+
+# --------------------------------------------------------------------------- #
+# ★ 2026-10-10（用户实测：改稿后书签区内容跨边界挪动 + 插入文字继承上标）
+#
+# 场景复刻（期刊模板常见结构）：段落被书签边界切开，且以**上标** run 结尾——
+#   [bmkStart 作者] 钱建国 / 1(上标) [bmkEnd 作者][bmkStart 单位] ，崔新程 / 2(上标)
+# 旧实现的两个缺陷：
+#   ① replace 的"原位重建"把整条生成序列插回**第一个 run 的位置** ⇒ 其后的 run
+#      被拉到 bookmarkEnd 之前 ⇒ "单位"书签区被掏空（编辑点之外结构被改变）；
+#   ② 段尾追加的 <w:ins> 继承**最后一个 run**（上标"2"）的格式 ⇒ 新增作者名
+#      显示为上标小字（用户报告的"严重格式错误"）。
+# --------------------------------------------------------------------------- #
+def _make_bookmark_split_docx(path: Path) -> str:
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    doc = Document()
+    p = doc.add_paragraph()
+    pel = p._p
+
+    def run(text: str, sup: bool = False) -> Any:
+        r = OxmlElement("w:r")
+        rpr = OxmlElement("w:rPr")
+        fonts = OxmlElement("w:rFonts")
+        fonts.set(qn("w:eastAsia"), "黑体")
+        rpr.append(fonts)
+        if sup:
+            va = OxmlElement("w:vertAlign")
+            va.set(qn("w:val"), "superscript")
+            rpr.append(va)
+        r.append(rpr)
+        t = OxmlElement("w:t")
+        t.text = text
+        r.append(t)
+        return r
+
+    def bmark(kind: str, bid: int, name: str) -> Any:
+        el = OxmlElement(f"w:bookmark{kind}")
+        el.set(qn("w:id"), str(bid))
+        el.set(qn("w:name"), name)
+        return el
+
+    # 段落标记格式（w:pPr/w:rPr）：黑体、无上标 —— 段尾追加应继承它
+    ppr = OxmlElement("w:pPr")
+    prpr = OxmlElement("w:rPr")
+    fonts = OxmlElement("w:rFonts")
+    fonts.set(qn("w:eastAsia"), "黑体")
+    prpr.append(fonts)
+    ppr.append(prpr)
+    pel.insert(0, ppr)
+
+    pel.append(bmark("Start", 1, "作者"))
+    pel.append(run("钱建国"))
+    pel.append(run("1", sup=True))
+    pel.append(bmark("End", 1, "作者"))
+    pel.append(bmark("Start", 2, "单位"))
+    pel.append(run("，崔新程"))
+    pel.append(run("2", sup=True))
+    doc.save(path)
+    return "钱建国1，崔新程2"
+
+
+def test_replace_keeps_bookmark_boundaries_and_end_insert_inherits_para_mark(tmp_path):
+    import docx
+    from docx.oxml.ns import qn
+
+    path = tmp_path / "b.docx"
+    old = _make_bookmark_split_docx(path)
+    pid = list_paragraphs(path)[0]["pid"]
+
+    out = apply_edits(path, [{"pid": pid, "op": "replace", "text": old + " 费大夫", "quote": old}])
+    assert out["applied"], out
+
+    pel = docx.Document(str(path)).paragraphs[0]._p
+    kids = list(pel)
+
+    # ① 书签边界不动："，崔新程" 必须仍位于 [bmkEnd 作者] **之后**（不得跨边界左移）
+    i_end = next(i for i, el in enumerate(kids) if el.tag == qn("w:bookmarkEnd"))
+    i_cui = next(
+        i
+        for i, el in enumerate(kids)
+        if el.tag == qn("w:r") and "崔新程" in (el.findtext(qn("w:t")) or "")
+    )
+    assert i_cui > i_end, "run 被挪过书签边界（P-08 回归！）"
+
+    # ② 段尾追加的 ins 继承**段落标记**格式：无 vertAlign、字体为黑体
+    ins = pel.find(qn("w:ins"))
+    assert ins is not None, "应有 <w:ins> 修订"
+    rpr = ins.find(f"{qn('w:r')}/{qn('w:rPr')}")
+    assert rpr is not None
+    assert rpr.find(qn("w:vertAlign")) is None, "段尾追加不得继承上标（P-08 回归！）"
+    fonts = rpr.find(qn("w:rFonts"))
+    assert fonts is not None and fonts.get(qn("w:eastAsia")) == "黑体"
+
+    # ③ 文本正确（含前导空格的新增）
+    assert _para_text(pel).endswith(" 费大夫")
+
+
+def test_append_inherits_para_mark_format(tmp_path):
+    import docx
+    from docx.oxml.ns import qn
+
+    path = tmp_path / "a.docx"
+    _make_bookmark_split_docx(path)
+    pid = list_paragraphs(path)[0]["pid"]
+
+    out = apply_edits(path, [{"pid": pid, "op": "append", "text": " 费大夫"}])
+    assert out["applied"], out
+
+    pel = docx.Document(str(path)).paragraphs[0]._p
+    ins = pel.find(qn("w:ins"))
+    assert ins is not None, "append 应产生 <w:ins>"
+    rpr = ins.find(f"{qn('w:r')}/{qn('w:rPr')}")
+    assert rpr is not None, "append 必须带 rPr（继承段落标记格式，旧实现裸默认字体）"
+    assert rpr.find(qn("w:vertAlign")) is None
+    fonts = rpr.find(qn("w:rFonts"))
+    assert fonts is not None and fonts.get(qn("w:eastAsia")) == "黑体"
