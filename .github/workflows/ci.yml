@@ -92,8 +92,32 @@ jobs:
         #   若日后想让 CI 全覆盖：额外安装 torch（CPU 轮子）+ sentence-transformers
         #   （首次约 +600MB；setup-uv 的缓存会保留，后续不再重复下载）。
         run: >
-          uv run --frozen python scripts/run_tests.py -q -n 0 -m "not slow"
+          uv run --frozen python -m pytest -q -p no:cacheprovider
+          -m "not slow"
           --ignore=tests/test_rerank_accel.py
           --ignore=tests/test_rag_device.py
           --ignore=tests/test_model_installer.py
           --ignore=tests/test_query_rewrite.py
+
+      - name: Guard — 用例数下限（防"零用例通过"的假绿）
+        # ★ 2026-10-10 加固起因：上一版 CI 走的是仓库自带启动器 scripts/run_tests.py，
+        #   而它在"抢不到锁 / 进程表检测到疑似已有 pytest 实例"时会
+        #   **打印 RESULT=SKIPPED 并 return 0** —— 那个 0 是"没跑测试"，不是"测试通过"。
+        #   该启动器是为**本地沙箱 turn 重放**去重设计的（CI 没这个问题），
+        #   且 CI 步骤 shell 的命令行里本身就含 `run_tests.py`、`uv run` 又会改变父链结构
+        #   ⇒ 存在误判成 SKIPPED 的真实风险。
+        #   处置：① CI 直跑 pytest（不用启动器）；② **仍然**加一道用例数闸门 ——
+        #   宁可红，也不接受"什么都没跑却绿"。判据取自 `--collect-only` 的收集数。
+        run: |
+          set -euo pipefail
+          n=$(uv run --frozen python -m pytest --collect-only -q -m "not slow" \
+              --ignore=tests/test_rerank_accel.py \
+              --ignore=tests/test_rag_device.py \
+              --ignore=tests/test_model_installer.py \
+              --ignore=tests/test_query_rewrite.py 2>&1 \
+              | grep -oE "[0-9]+ tests? collected" | grep -oE "^[0-9]+" | head -1)
+          echo "collected tests = ${n:-0}（下限 1500）"
+          if [ -z "${n:-}" ] || [ "$n" -lt 1500 ]; then
+            echo "::error::用例收集数过低（${n:-0} < 1500）—— 疑似未真正执行，拒绝假绿"
+            exit 1
+          fi
