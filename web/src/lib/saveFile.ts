@@ -41,15 +41,29 @@ export function bytesToBase64(bytes: Uint8Array): string {
   return btoa(bin);
 }
 
+/** 依据文件名推断保存对话框的**类型过滤**（2026-10-10 修复"保存下来不是 docx"）。
+ *  ★ 不传 filters 时 Windows 对话框是「所有文件」：扩展名可被改掉/丢失 ⇒
+ *    双击落进文本编辑器显示二进制"乱码"（用户实测）。锁定类型后由对话框强制补扩展名。 */
+function filtersFor(fileName: string): { name: string; extensions: string[] }[] | undefined {
+  const m = /\.([A-Za-z0-9]+)$/.exec(fileName);
+  return m ? [{ name: `${m[1].toUpperCase()} 文件`, extensions: [m[1].toLowerCase()] }] : undefined;
+}
+
 /** 弹原生「另存为」；返回 `null` = 用户取消。 */
 async function pickSavePath(fileName: string): Promise<string | null> {
   const w = window as unknown as {
     __TAURI_INTERNALS__: { invoke: (cmd: string, args?: unknown) => Promise<unknown> };
   };
   const picked = await w.__TAURI_INTERNALS__.invoke("plugin:dialog|save", {
-    options: { title: "另存为", defaultPath: fileName },
+    options: { title: "另存为", defaultPath: fileName, filters: filtersFor(fileName) },
   });
   return typeof picked === "string" && picked.length > 0 ? picked : null;
+}
+
+/** ★ 扩展名保险（2026-10-10）：对话框返回的路径若丢了扩展名（用户手滑/系统差异），
+ *  按预期后缀补齐 —— 否则文件会以无扩展名/错误扩展名落盘，双击进文本编辑器显示乱码。 */
+function ensureExt(dest: string, ext: string): string {
+  return dest.toLowerCase().endsWith(`.${ext.toLowerCase()}`) ? dest : `${dest}.${ext}`;
 }
 
 /** 浏览器回退：`<a download>`（保持开发态可用）。 */
@@ -75,8 +89,10 @@ export async function saveBlob(fileName: string, blob: Blob): Promise<SaveOutcom
     downloadViaBrowser(fileName, blob);
     return { kind: "fallback" };
   }
-  const dest = await pickSavePath(fileName);
-  if (!dest) return { kind: "cancelled" };
+  const picked = await pickSavePath(fileName);
+  if (!picked) return { kind: "cancelled" };
+  const m = /\.([A-Za-z0-9]+)$/.exec(fileName);
+  const dest = m ? ensureExt(picked, m[1]) : picked;
   const bytes = new Uint8Array(await blob.arrayBuffer());
   const out = await api.writeLocalFile(dest, bytesToBase64(bytes));
   return { kind: "saved", path: out.path };
@@ -92,8 +108,9 @@ export async function saveDocxExport(
     downloadViaBrowser(fileName, new Blob(), docId, mode);
     return { kind: "fallback" };
   }
-  const dest = await pickSavePath(fileName);
-  if (!dest) return { kind: "cancelled" };
+  const picked = await pickSavePath(fileName);
+  if (!picked) return { kind: "cancelled" };
+  const dest = ensureExt(picked, "docx");
   const out = await api.exportDocumentTo(docId, dest, mode);
   return { kind: "saved", path: out.path };
 }

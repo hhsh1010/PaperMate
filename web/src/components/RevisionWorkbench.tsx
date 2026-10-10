@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { saveDocxExport, saveOutcomeMessage } from "../lib/saveFile";
+import { saveDocxExport } from "../lib/saveFile";
 import { renderAsync } from "docx-preview";
 import { api } from "../api/client";
 import type { ApplyEditsOut, EditOp, ParaAction, ParaTransformOut, StreamItem } from "../lib/types";
@@ -64,8 +64,9 @@ export function RevisionWorkbench({
       setSaveMsg(null);
       try {
         const base = docName?.replace(/\.docx$/i, "") || `文档${docId}`;
-        const out = await saveDocxExport(docId, mode, `${base}${mode === "clean" ? "_干净版" : ""}.docx`);
-        setSaveMsg(saveOutcomeMessage(out)); // 取消 ⇒ null（不打扰）
+        // ★ 2026-10-10（用户要求）：成功**不再显示**右侧提示（长路径挤占顶栏）；
+        //   仅**失败**可见（保存失败不许静默）。取消也不提示。
+        await saveDocxExport(docId, mode, `${base}${mode === "clean" ? "_干净版" : ""}.docx`);
       } catch (e) {
         // ★ 失败必须可见（不许静默——与"假装有进度"同族）
         setSaveMsg(`保存失败：${e instanceof Error ? e.message : String(e)}`);
