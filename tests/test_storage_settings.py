@@ -9,11 +9,22 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
 
 from papermate.services import storage_config as sc
+
+# ★ 2026-10-10（CI 首次在 Linux 跑暴露）：本文件校验的是**存储位置/盘符**——
+#   `storage_config.validate_root` 按设计**只接受 Windows 路径**（要求盘符或 `\\` 开头，
+#   并用 `list_drives()` 对盘符、拒绝网络映射盘），权威校验还在 Tauri 启动器（lib.rs）。
+#   ⇒ 在 Linux 上 `tmp_path`（`/tmp/...`）必然被判"请填写完整路径"，断言随之失败。
+#   本文件因此**平台限定**：非 Windows 直接跳过（这些用例仍在本地 Windows 门禁全量覆盖）。
+pytestmark = pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="存储位置校验按设计仅支持 Windows 路径/盘符（详见 storage_config.validate_root 文档）",
+)
 
 
 @pytest.fixture

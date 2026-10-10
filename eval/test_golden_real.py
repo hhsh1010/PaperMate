@@ -84,6 +84,21 @@ def test_all_corpus_docs_have_at_least_five_chunks(real_chunks: dict[str, list])
     )
 
 
+def _report_path() -> Path:
+    """`eval/report_real.json` 路径；**不存在则跳过**（与 test_eval_baseline 同范式）。
+
+    ★ 2026-10-10（CI 首次跑暴露）：该报告是**本地评测产物、不入库** ⇒ 全新 clone（CI）
+    必然没有。报告缺失时跳过，而不是把"没跑过评测"误报成代码缺陷。
+    """
+    p = Path(__file__).resolve().parent / "report_real.json"
+    if not p.exists():
+        pytest.skip(
+            "未找到 eval/report_real.json（先跑 python eval/run_eval.py --embedder real "
+            "--profile prod --cases cases/golden_real.jsonl --out eval/report_real.json）"
+        )
+    return p
+
+
 def test_precision_cap_is_reported_and_saturated() -> None:
     """★ T-04-B：`precision@k` 已逼近理论上限 → 该指标**没有分辨力**，必须如实标注。
 
@@ -100,7 +115,7 @@ def test_precision_cap_is_reported_and_saturated() -> None:
 
     import run_eval
 
-    rep = json.loads((Path(__file__).resolve().parent / "report_real.json").read_text(encoding="utf-8"))
+    rep = json.loads(_report_path().read_text(encoding="utf-8"))
     for kind in ("verbatim", "multi_doc", "multi_gold"):
         blk = rep["metrics_by_kind"][kind]
         cap = blk.get("precision_cap")
@@ -158,7 +173,7 @@ def test_report_exposes_discriminative_flags() -> None:
     """
     import json
 
-    rep = json.loads((Path(__file__).resolve().parent / "report_real.json").read_text(encoding="utf-8"))
+    rep = json.loads(_report_path().read_text(encoding="utf-8"))
     for kind in ("verbatim", "multi_doc", "multi_gold", "paraphrase"):
         blk = rep["metrics_by_kind"][kind]
         flags = blk.get("discriminative")
@@ -211,7 +226,7 @@ def test_repo_report_uses_documented_k() -> None:
 
     import run_eval
 
-    rep = json.loads((Path(__file__).resolve().parent / "report_real.json").read_text(encoding="utf-8"))
+    rep = json.loads(_report_path().read_text(encoding="utf-8"))
     assert rep["k"] == run_eval._BASELINE_K, (
         f"仓库自带报告用了非文档化的 k={rep['k']}（期望 {run_eval._BASELINE_K} = 命令行默认值）。"
         "口径参数一变，precision_cap / 各 @k 指标的含义都会跟着变 ⇒ 请按文档化命令重跑，"

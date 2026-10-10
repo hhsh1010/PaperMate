@@ -156,10 +156,19 @@ class DocumentParser:
     def parse(self, source: str | Path | Iterable[str]) -> list[ParsedBlock]:
         if isinstance(source, str | Path):
             p = Path(source)
-            if p.exists() and p.suffix.lower() == ".pdf":
+            # ★ 2026-10-10（CI 在 Linux 暴露）：**路径探测本身**就可能抛错 ——
+            #   Linux 按**字节**限制单个文件名（255B，中文 3B/字）⇒ 把一段长文本当 source 传进来时，
+            #   `p.exists()` 直接抛 OSError(ENAMETOOLONG)；而 Windows 按 UTF-16 字符数算上限，
+            #   通常只是老老实实返回 False（目标平台 Windows 因此一直没暴露）。
+            #   ⇒ 探测必须容错，失败即按"不是路径"处理（与原语义一致：不是有效路径就当纯文本）。
+            try:
+                is_pdf = p.exists() and p.suffix.lower() == ".pdf"
+                is_file = p.exists()
+            except OSError:
+                is_pdf = is_file = False
+            if is_pdf:
                 return self.parse_pdf(p)
-            # 当作纯文本路径或字符串
-            if p.exists():
+            if is_file:
                 return self.parse_text(p.read_text(encoding="utf-8", errors="ignore"))
             return self.parse_text(str(source))
         # 可迭代文本块：无页码来源 → page=None
