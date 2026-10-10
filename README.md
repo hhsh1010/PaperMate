@@ -6,7 +6,7 @@
 ![Tech](https://img.shields.io/badge/Python-3.11%2B-green)
 ![Status](https://img.shields.io/badge/status-Design%20Ready-yellow)
 ![CI](https://github.com/hhsh1010/PaperMate/actions/workflows/ci.yml/badge.svg)
-[![Live Demo](https://img.shields.io/badge/demo-%E5%9C%A8%E7%BA%BF%E7%95%8C%E9%9D%A2-blue)](https://hhsh1010.github.io/PaperMate/)
+<a href="https://hhsh1010.github.io/PaperMate/" target="_blank" rel="noopener"><img src="https://img.shields.io/badge/demo-%E5%9C%A8%E7%BA%BF%E7%95%8C%E9%9D%A2-blue" alt="Live Demo"></a>
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
 ---
@@ -71,7 +71,9 @@ flowchart TB
 
 ## 演示
 
-**① 在线界面 demo（推荐，点开即用）**：👉 **https://hhsh1010.github.io/PaperMate/**
+**① 在线界面 demo（推荐，点开即用）**：👉
+<a href="https://hhsh1010.github.io/PaperMate/" target="_blank" rel="noopener"><b>https://hhsh1010.github.io/PaperMate/</b></a>
+（**新标签页打开**，看完随时切回本页）
 
 - 打开就是真实前端界面，数据为**内置样例**，**不需要任何 API key、不连任何后端、零费用**；
 - 由 [`.github/workflows/pages.yml`](.github/workflows/pages.yml) 以 `VITE_DEMO_MODE=1` 构建
