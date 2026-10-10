@@ -46,6 +46,36 @@ if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
 
+# ── ★ 2026-10-10：进程级全局缓存的**每测试自动重置**（串行顺序依赖的根因修复）────
+# 实测取证（CI 后端 job 串行跑暴露）：`test_budget_abort_user_text` 调
+#   runtime_settings.update({"max_tokens_budget": 1000})
+# ⇒ **进程级 `runtime_settings._STATE` 缓存残留"1000 token 预算"**；而后续测试（如
+#   `test_citation_model_truncated`）的 fixture 只清 `cfg_mod._settings`、**没清 `_STATE`**
+# ⇒ 那些用例的 Agent 循环被预算闸门提前掐断 ⇒ 检索工具根本没被调用（表现为"没有拿到引用"）。
+#
+# 为什么必须放 conftest（而不是给单个文件补清缓存）：
+#   ① 这类缓存是**进程级**的，污染面 = "任何先跑过的、改过设置的用例" ⇒ 逐个打补丁是打地鼠；
+#   ② 并行（-n N）时污染者与被污染者通常落在不同 worker ⇒ **侥幸绿**；串行/CI 串行必现
+#      ——这正是"并行掩盖顺序依赖"的经典形态（与既有教训同族：串行被残留 env 掩盖）。
+#
+# ⚠️ 语义：只在**每个测试前后**清缓存（下一次读取即从磁盘重建）⇒ 不改任何用例的断言与行为；
+#    用例内部自己设置的运行时设置照常生效（重置发生在用例之间，不在其内部）。
+@pytest.fixture(autouse=True)
+def _reset_process_global_caches():
+    import papermate.config as _cfg
+    from papermate import runtime_settings as _rs
+
+    def _clear() -> None:
+        # ⚠️ 变量名是 **`_state`（小写）** —— `test_budget_abort_user_text.py` 曾误写成 `_STATE`（大写）
+        #    ⇒ 只是新建了个无关属性、真缓存根本没清（静默失效，已一并修正：见该文件 fixture）。
+        _rs._state = None
+        _cfg._settings = None
+
+    _clear()
+    yield
+    _clear()
+
+
 # ── T-10（2026-09-30）：分层标记的**单一来源** ────────────────────────────────
 # 为什么放 conftest 而不是逐个测试文件加装饰器：
 #   ① 卡片的范围就是 `pyproject.toml` + `tests/conftest.py`（不动测试源码）；

@@ -76,15 +76,23 @@ jobs:
         #   （本 workflow 初稿就写错了这一处 —— 会让补装完全失效）。
         run: uv pip install faiss-cpu==1.15.0 pymupdf==1.28.2 huggingface-hub==0.36.2
       - name: pytest (not slow)
-        # ★ 排除名单是**实测**得出的（2026-10-10，轻依赖 venv 仿真 1685 用例）：
-        #   补装上面三个轻量包后 → 1684 passed / 20 failed+13 errors，剩余失败**全部**集中在这 4 个文件，
+        # ★ 2026-10-10 首次 CI 实测（run 38053095414）：`-n 2`（xdist 并行）在 runner 上 10.5s 即失败，
+        #   报 "Different tests were collected between gw0 and gw1"。注意缺的是
+        #   test_export_to / test_eval_summary / test_failure_attribution 的**整个类**（不是个别用例）
+        #   ⇒ 更像「某个 worker 在收集期异常」而非用例失败；且 tests/conftest.py 在**导入期**就改进程环境
+        #   （PAPERMATE_DATA_DIR = mkdtemp(...)），并行下天然存在竞态面。
+        #   ⇒ 现阶段**确定性优先**：CI 串行（-n 0）。代价是多几分钟运行时间，换来"不会偶发红"。
+        #   ⏭️ 后续优化：并行化需要 runner 的**完整日志**才能定位那次 worker 异常（截图只到尾部不够）；
+        #      定位后再恢复 -n 2。本地日常门禁仍用仓库自带的 -n 3（本地实测稳定）。
+        #
+        # ★ 排除名单是实测得出的：补装轻量包后浅依赖环境 1685 用例 → 剩余失败全部集中在这 4 个文件，
         #   根因均为缺 torch / sentence_transformers（状态与提示文案按"运行环境未就绪"分支走）。
-        #   且这 4 个文件已在**完整依赖的主 venv** 中复跑验证通过（query_rewrite + model_installer 共 94 passed）
+        #   这 4 个文件已在**完整依赖的主 venv** 中复跑验证通过（query_rewrite + model_installer 共 94 passed）
         #   ⇒ 属**环境差异、非代码缺陷**，故 CI 排除；它们仍由本地发布门禁（全量）覆盖。
         #   若日后想让 CI 全覆盖：额外安装 torch（CPU 轮子）+ sentence-transformers
         #   （首次约 +600MB；setup-uv 的缓存会保留，后续不再重复下载）。
         run: >
-          uv run --frozen python scripts/run_tests.py -q -n 2 -m "not slow"
+          uv run --frozen python scripts/run_tests.py -q -n 0 -m "not slow"
           --ignore=tests/test_rerank_accel.py
           --ignore=tests/test_rag_device.py
           --ignore=tests/test_model_installer.py

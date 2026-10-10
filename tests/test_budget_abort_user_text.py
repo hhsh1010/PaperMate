@@ -37,7 +37,9 @@ def client():
     tmp = tempfile.mkdtemp(prefix="papermate_budget_notice_test_")
     os.environ["PAPERMATE_DATA_DIR"] = tmp
     cfg_mod._settings = None
-    runtime_settings._STATE = None  # type: ignore[attr-defined]  清缓存，确保读临时目录
+    runtime_settings._state = None  # ★ 2026-10-10 修正：变量名是 `_state`（小写）。此前写 `_STATE`
+    # （大写）只是新建了个无关属性 ⇒ 真缓存没清 ⇒ 本文件把 max_tokens_budget=1000 泄漏给后续用例
+    # （实测致 test_citation_model_truncated 检索工具被预算闸门掐断）。
     from papermate.api.app import create_app
 
     app = create_app()
