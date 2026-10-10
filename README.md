@@ -6,6 +6,7 @@
 ![Tech](https://img.shields.io/badge/Python-3.11%2B-green)
 ![Status](https://img.shields.io/badge/status-Design%20Ready-yellow)
 ![CI](https://github.com/hhsh1010/PaperMate/actions/workflows/ci.yml/badge.svg)
+[![Live Demo](https://img.shields.io/badge/demo-%E5%9C%A8%E7%BA%BF%E7%95%8C%E9%9D%A2-blue)](https://hhsh1010.github.io/PaperMate/)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
 ---
@@ -70,8 +71,21 @@ flowchart TB
 
 ## 演示
 
+**① 在线界面 demo（推荐，点开即用）**：👉 **https://hhsh1010.github.io/PaperMate/**
+
+- 打开就是真实前端界面，数据为**内置样例**，**不需要任何 API key、不连任何后端、零费用**；
+- 由 [`.github/workflows/pages.yml`](.github/workflows/pages.yml) 以 `VITE_DEMO_MODE=1` 构建
+  （[`web/src/demo/mock.ts`](web/src/demo/mock.ts) 拦截 `/api/v1/*` 并提供样例数据，连**流式回答**都模拟）；
+  页面底部常驻一条「演示模式」横幅，避免把样例数据误当成真实运行结果。
+
+**② 端到端 demo（证明链路真的跑得通）**：**Actions → `Demo` → Run workflow**
+
+- 用内置 `fake` 模型**零密钥**跑完：上传解析 → SSE 流式问答 → 引用溯源 → 改稿（Word 修订痕迹）→ 导出双版本；
+- 结果写入 **Job Summary**（页面上直接可读），导出的 `.docx` 作为 **artifact** 可下载 ——
+  可在 Word 里亲手确认「修订痕迹真的写进去了」。
+
 > 📌 待补：`docs/assets/` 下放 3 张截图（研读问答带引用 / 改稿工作台的修订对比 / 设置页功能模块）与一段 30s 录屏 GIF。
-> 在线 Demo 部署步骤见 [`deploy/DEMO_DEPLOY_RUNBOOK.md`](deploy/DEMO_DEPLOY_RUNBOOK.md)。
+> 自建在线 Demo（临时隧道/云服务器）步骤见 [`deploy/DEMO_DEPLOY_RUNBOOK.md`](deploy/DEMO_DEPLOY_RUNBOOK.md)。
 
 ## 核心亮点（6 条）
 
