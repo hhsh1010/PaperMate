@@ -21,6 +21,8 @@ htmlcov/
 .env
 .env.*
 !.env.example
+# 演示模式环境文件**必须入库**：只有 `VITE_DEMO_MODE=1`，不含任何密钥（GitHub Pages 静态 demo 靠它开启）
+!web/.env.demo
 *.key
 *.pem
 
@@ -41,6 +43,8 @@ data/
 node_modules/
 web/dist/
 web/dist.old/
+# 演示模式产物（npm run build:demo）—— 由 .github/workflows/pages.yml 发布到 GitHub Pages
+web/dist-demo/
 
 # ---- 宿主工具缓存（非本项目产物）----
 .dsh-plugin-cache/

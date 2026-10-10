@@ -1,0 +1,71 @@
+name: Pages (static demo)
+
+# ★ 2026-10-10 建立：把「零后端、零密钥」的**静态网页 demo** 发布到 GitHub Pages。
+#   产物 = `npm run build:demo`（VITE_DEMO_MODE=1 ⇒ src/demo/mock.ts 用内置样例数据应答所有
+#   /api/v1/* 请求）⇒ 打开 https://<owner>.github.io/<repo>/ 就是一个能点的界面，
+#   **不连任何后端、不需要任何 API key、不产生任何费用**。
+#
+# 一次性设置（仓库 → Settings → Pages → Source 选 "GitHub Actions"）；
+# 仓库需为 Public（免费账号的 Pages 仅对公开仓库可用）。
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "web/src/demo/**"
+      - "web/src/main.tsx"
+      - "web/src/App.tsx"
+      - "web/.env.demo"
+      - "web/package.json"
+      - "web/scripts/build.mjs"
+      - ".github/workflows/pages.yml"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build static demo
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install
+        working-directory: web
+        run: npm ci
+      - name: Build demo (VITE_DEMO_MODE=1)
+        working-directory: web
+        run: npm run build:demo
+      - name: Sanity check（产物里必须带演示模式标记，防止误把真实构建发上去）
+        working-directory: web
+        run: |
+          set -euo pipefail
+          test -f dist-demo/index.html || { echo "::error::dist-demo/index.html 不存在"; exit 1; }
+          grep -q "演示模式" dist-demo/assets/*.js || { echo "::error::产物里找不到演示模式横幅 —— 可能没有按 demo 模式构建"; exit 1; }
+          echo "演示产物检查通过 ✓"
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist-demo
+
+  deploy:
+    name: Deploy to Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

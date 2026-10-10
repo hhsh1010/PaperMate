@@ -42,7 +42,11 @@ function run(command, args) {
 
 try {
   await run("npx", ["tsc", "--noEmit"]);
-  await run("npx", ["vite", "build"]);
+  // 透传额外参数给 vite build（如 `--mode demo --base=/PaperMate/ --outDir dist-demo`）：
+  // 演示构建（build:demo）靠它拿到 demo 模式环境变量与非根路径 base，而**不改动默认构建的行为**。
+  const extra = process.argv.slice(2);
+  if (extra.length) console.log(`[build] 透传给 vite 的参数：${extra.join(" ")}`);
+  await run("npx", ["vite", "build", ...extra]);
   console.log("[build] ✓ 完成");
 } catch (err) {
   console.error(`[build] ✗ ${err instanceof Error ? err.message : String(err)}`);
