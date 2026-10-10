@@ -93,6 +93,7 @@ jobs:
         #   （首次约 +600MB；setup-uv 的缓存会保留，后续不再重复下载）。
         run: >
           uv run --frozen python -m pytest -q -p no:cacheprovider
+          -n 0
           -m "not slow"
           --ignore=tests/test_rerank_accel.py
           --ignore=tests/test_rag_device.py
@@ -105,12 +106,18 @@ jobs:
         #   **打印 RESULT=SKIPPED 并 return 0** —— 那个 0 是"没跑测试"，不是"测试通过"。
         #   该启动器是为**本地沙箱 turn 重放**去重设计的（CI 没这个问题），
         #   且 CI 步骤 shell 的命令行里本身就含 `run_tests.py`、`uv run` 又会改变父链结构
-        #   ⇒ 存在误判成 SKIPPED 的真实风险。
-        #   处置：① CI 直跑 pytest（不用启动器）；② **仍然**加一道用例数闸门 ——
-        #   宁可红，也不接受"什么都没跑却绿"。判据取自 `--collect-only` 的收集数。
+        #   ⇒ 存在误判成 SKIPPED 的真实风险。处置：CI 直跑 pytest（不用启动器）。
+        #
+        # ★★ 2026-10-11 回归修复（**我自己造成的**）：换成直跑 pytest 时**漏了 `-n 0`** ——
+        #   而 `pyproject.toml` 的 `addopts = "-n 3 --dist=loadfile"` 会补上 3 个 xdist worker
+        #   ⇒ 并行把**已知的 xdist「different tests collected between gw0 and gw1」间歇性失败**
+        #   带了回来（实测：同一命令在 54a1f5c 绿、在 ca66983 红）。这里显式 `-n 0` 覆盖 addopts，
+        #   串行是确定性的（Linux runner 全量约 48s，代价可忽略）。
+        #
+        # 判据取自 `--collect-only` 的收集数：宁可红，也不接受"什么都没跑却绿"。
         run: |
           set -euo pipefail
-          n=$(uv run --frozen python -m pytest --collect-only -q -m "not slow" \
+          n=$(uv run --frozen python -m pytest --collect-only -q -n 0 -m "not slow" \
               --ignore=tests/test_rerank_accel.py \
               --ignore=tests/test_rag_device.py \
               --ignore=tests/test_model_installer.py \
