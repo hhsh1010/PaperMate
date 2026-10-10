@@ -812,8 +812,9 @@ class DocParagraphOut(BaseModel):
 
     ⚠️ `style` 与 `reason` 可为 `None`：
     - `style=None` = 该段落没有命名样式（docx 允许）；
-    - `reason=None` = 该段落**可编辑**；非 None（`field` / `media`）表示含域代码或内嵌媒体，
-      前端据此禁用编辑并说明原因。
+    - `reason=None` = 该段落**可编辑**；非 None（`field`）表示含域代码，前端据此禁用编辑。
+    ★ 2026-10-10：媒体段（含图片/公式对象）**不再因 media 不可编辑**——走"媒体锚定"：
+      仅改文字部分，媒体 run 原位保留；`media=True` 供前端提示"仅改文字，图和公式不动"。
     """
 
     pid: str
@@ -822,6 +823,7 @@ class DocParagraphOut(BaseModel):
     empty: bool
     editable: bool
     reason: str | None = None
+    media: bool = False
     deleted: bool
 
 

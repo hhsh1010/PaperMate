@@ -79,7 +79,7 @@ export function RevisionWorkbench({
   const [fidError, setFidError] = useState<string | null>(null);
   const [fidAligned, setFidAligned] = useState<boolean | null>(null);
   /** 图文模式选中的段落（点击注入 pid 的元素） */
-  const [fidSel, setFidSel] = useState<{ pid: string; text: string; editable: boolean; kind: "para" | "table" } | null>(null);
+  const [fidSel, setFidSel] = useState<{ pid: string; text: string; editable: boolean; media: boolean; kind: "para" | "table" } | null>(null);
   const [fidEditing, setFidEditing] = useState<{ pid: string; text: string } | null>(null);
   const [fidCompose, setFidCompose] = useState<{ pid: string; op: "append" | "insert_after"; text: string } | null>(null);
   /** 应用/撤销后自增，触发图文模式重新渲染（内容已变化） */
@@ -390,6 +390,7 @@ export function RevisionWorkbench({
         pid,
         text: item.kind === "para" ? (item.text ?? "") : "",
         editable: item.kind === "para" && item.editable === true,
+        media: item.kind === "para" && item.media === true,
         kind: item.kind,
       });
     },
@@ -669,26 +670,32 @@ export function RevisionWorkbench({
                 <div className="rw-fidsel">
                   <span className="rw-pid">{fidSel.pid}</span>
                   {fidSel.editable ? (
-                    <span className="rw-ops" style={{ display: "inline-flex" }}>
-                      <button className="rw-op" onClick={() => { setFidEditing({ pid: fidSel.pid, text: fidSel.text }); }}>
-                        <Icons.copy size={12} /> 改写
-                      </button>
-                      <button className="rw-op" onClick={() => setFidCompose({ pid: fidSel.pid, op: "append", text: "" })}>
-                        <Icons.plus size={12} /> 追加
-                      </button>
-                      <button className="rw-op" onClick={() => setFidCompose({ pid: fidSel.pid, op: "insert_after", text: "" })}>
-                        <Icons.arrowDown size={12} /> 下插
-                      </button>
-                      <button className="rw-op danger" onClick={fidDelete} disabled={applying}>
-                        <Icons.trash size={12} /> 删除
-                      </button>
-                      <button className="rw-op" title="AI 改写（扩写/缩写/润色/去重）" onClick={() => openAi(fidSel.pid, fidSel.text)}>
-                        <Icons.sparkles size={12} /> AI功能
-                      </button>
-                      <button className="rw-op" onClick={() => setFidSel(null)}>取消选择</button>
-                    </span>
+                    <>
+                      <span className="rw-ops" style={{ display: "inline-flex" }}>
+                        <button className="rw-op" onClick={() => { setFidEditing({ pid: fidSel.pid, text: fidSel.text }); }}>
+                          <Icons.copy size={12} /> 改写
+                        </button>
+                        <button className="rw-op" onClick={() => setFidCompose({ pid: fidSel.pid, op: "append", text: "" })}>
+                          <Icons.plus size={12} /> 追加
+                        </button>
+                        <button className="rw-op" onClick={() => setFidCompose({ pid: fidSel.pid, op: "insert_after", text: "" })}>
+                          <Icons.arrowDown size={12} /> 下插
+                        </button>
+                        <button className="rw-op danger" onClick={fidDelete} disabled={applying}>
+                          <Icons.trash size={12} /> 删除
+                        </button>
+                        <button className="rw-op" title="AI 改写（扩写/缩写/润色/去重）" onClick={() => openAi(fidSel.pid, fidSel.text)}>
+                          <Icons.sparkles size={12} /> AI功能
+                        </button>
+                        <button className="rw-op" onClick={() => setFidSel(null)}>取消选择</button>
+                      </span>
+                      {/* ★ 2026-10-10：媒体段解锁编辑——提示"仅改文字"，图和公式原地保留 */}
+                      {fidSel.media && (
+                        <span className="rw-hint">此段含图片/公式：仅修改文字部分，图和公式保持原位不动</span>
+                      )}
+                    </>
                   ) : (
-                    <span className="rw-hint">此段不可编辑（空段/域/媒体）{fidSel.kind === "table" ? "，表格请在「结构」模式编辑" : ""}</span>
+                    <span className="rw-hint">此段不可编辑（空段或含域代码）{fidSel.kind === "table" ? "，表格请在「结构」模式编辑" : ""}</span>
                   )}
                 </div>
               )}

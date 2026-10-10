@@ -185,6 +185,8 @@ export interface ParaView {
   empty: boolean;
   editable: boolean;
   reason: string | null;
+  /** ★ 含图片/公式对象：可编辑但**仅改文字部分**，媒体 run 原位保留（2026-10-10） */
+  media?: boolean;
 }
 
 /** C4：单条 docx 编辑操作（与后端 EditOp 对齐；purge=物理移除空壳段，仅限已标记删除的正文段落） */
@@ -213,6 +215,7 @@ export interface StreamCell {
   empty: boolean;
   editable: boolean;
   reason: string | null;
+  media?: boolean;
 }
 
 /** P1：文档流视图条目（GET /documents/{id}/stream）——高保真渲染按序对齐用 */
@@ -224,6 +227,8 @@ export interface StreamItem {
   empty?: boolean;
   editable?: boolean;
   reason?: string | null;
+  /** ★ 含图片/公式对象：可编辑但仅改文字部分（2026-10-10） */
+  media?: boolean;
   /** 段落标记已被标记删除（pPr/rPr/w:del）——标记删除后的空壳段，可「彻底删除」 */
   deleted?: boolean;
   cells?: StreamCell[];

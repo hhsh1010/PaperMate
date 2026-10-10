@@ -1048,3 +1048,82 @@ def test_append_inherits_para_mark_format(tmp_path):
     assert rpr.find(qn("w:vertAlign")) is None
     fonts = rpr.find(qn("w:rFonts"))
     assert fonts is not None and fonts.get(qn("w:eastAsia")) == "黑体"
+
+
+# --------------------------------------------------------------------------- #
+# ★ 2026-10-10（用户需求："只对文字进行修改，图和公式则不应进行修改"）
+#
+# 媒体段（含 w:drawing / w:object / w:pict 的段落）解锁编辑：
+#   - replace 走"媒体锚定"：媒体 run 对文字 diff 贡献为零 ⇒ 旧实现会把它当
+#     "无内容 run"移除 ⇒ 公式/图片丢失（这正是当初整段拒绝的原因）；
+#   - 现在媒体 run **原位保留**，仅文字部分参与 diff 与重建。
+# --------------------------------------------------------------------------- #
+def _make_media_docx(path: Path) -> str:
+    """图文混排段：[run"左侧为"][run(含 w:drawing)][run"，其中为高度。"]"""
+    from docx.oxml import OxmlElement
+
+    doc = Document()
+    p = doc.add_paragraph()
+    pel = p._p
+
+    def trun(text: str) -> Any:
+        r = OxmlElement("w:r")
+        t = OxmlElement("w:t")
+        t.text = text
+        r.append(t)
+        return r
+
+    pel.append(trun("左侧为"))
+    media = OxmlElement("w:r")
+    media.append(OxmlElement("w:drawing"))
+    pel.append(media)
+    pel.append(trun("，其中为高度。"))
+    doc.save(path)
+    return "左侧为，其中为高度。"
+
+
+def test_replace_preserves_media_objects(tmp_path):
+    import docx
+    from docx.oxml.ns import qn
+
+    path = tmp_path / "m.docx"
+    old = _make_media_docx(path)
+    pid = list_paragraphs(path)[0]["pid"]
+
+    new = "左侧为输入特征图。其中为高度。"
+    out = apply_edits(path, [{"pid": pid, "op": "replace", "text": new, "quote": old}])
+    assert out["applied"], out
+
+    pel = docx.Document(str(path)).paragraphs[0]._p
+    # ① 媒体对象仍在（未被当作"无内容 run"移除——P-08 核心断言）
+    assert len(pel.findall(f"{qn('w:r')}/{qn('w:drawing')}")) == 1, "媒体对象丢失（回归！）"
+    # ② 文字已按 AI 改写更新
+    assert _para_text(pel) == new
+    # ③ 对象位置保持：媒体 run 仍在"前段文字"与"改写文字"之间（原位，未移动/未删除）
+    kids = list(pel)
+    i_media = next(i for i, el in enumerate(kids) if el.find(qn("w:drawing")) is not None)
+    i_ins = next(i for i, el in enumerate(kids) if el.tag == qn("w:ins"))
+    assert i_media < i_ins, "媒体对象应保持在插入文字之前（原位）"
+    prev_text = "".join((t.text or "") for t in kids[i_media - 1].iter(qn("w:t")))
+    assert prev_text == "左侧为", "媒体对象的前邻应仍是原文字"
+
+
+def test_pure_media_paragraph_still_not_editable(tmp_path):
+    """纯图段（无文字）仍不可编辑：没有文字可改，replace 必须被拒。"""
+    from docx.oxml import OxmlElement
+
+    path = tmp_path / "img.docx"
+    doc = Document()
+    p = doc.add_paragraph()
+    media = OxmlElement("w:r")
+    media.append(OxmlElement("w:drawing"))
+    p._p.append(media)
+    doc.save(path)
+
+    items = list_paragraphs(path)
+    assert items[0]["editable"] is False
+    assert items[0]["empty"] is True
+
+    out = apply_edits(path, [{"pid": items[0]["pid"], "op": "replace", "text": "x"}])
+    assert out["applied"] == []
+    assert "不可编辑" in out["rejected"][0]["reason"]

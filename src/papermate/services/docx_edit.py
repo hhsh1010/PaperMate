@@ -9,7 +9,8 @@
   **宁可拒不可错**，杜绝改错段落。
 - **round-trip 保真**：先落临时文件 → ``zipfile.testzip`` + 重开验证 → ``os.replace`` 原子替换。
 - P1 边界：正文段落 replace / append / insert_after；表格/列表/delete/numPr 复制属 C3；
-  含域代码（TOC/题注）或媒体（图/表对象）的段落一律 reject，避免破坏结构。
+  含域代码（TOC/题注）的段落一律 reject（域结构脆弱）；媒体段（图/公式对象）自
+  2026-10-10 起走"媒体锚定"：仅改文字部分，媒体 run 原位保留不参与重写。
 
 本模块为纯文件操作（无 DB 依赖），存储路径由 DocumentService 提供。
 """
@@ -138,7 +139,11 @@ def _para_text(p: Any) -> str:
 def _entry(pid: str, el: Any, style: str | None = None) -> dict:
     text = _para_text(el)
     field, media = _has_field(el), _has_media(el)
-    reason = "field" if field else ("media" if media else None)
+    # ★ 2026-10-10（用户需求："只对文字进行修改，图和公式则不应进行修改"）：
+    #   媒体段（含图片/公式对象）**不再整段拒绝**——replace 走"媒体锚定"路径
+    #   （媒体 run 原位保留、一概不动，仅文字部分参与 diff）；
+    #   纯图段（无文字）仍不可编辑（无文字可改）；域代码段维持拒绝（域结构脆弱）。
+    reason = "field" if field else None
     # 段落标记是否被标记删除（pPr/rPr/w:del）——标记删除后的「空壳段」识别依据，
     # 前端据此展示「已删除」徽标与「彻底删除」入口（跨刷新稳定，不依赖前端状态）。
     deleted = el.find(f"{qn('w:pPr')}/{qn('w:rPr')}/{qn('w:del')}") is not None
@@ -147,8 +152,9 @@ def _entry(pid: str, el: Any, style: str | None = None) -> dict:
         "style": style,
         "text": text,
         "empty": not text.strip(),
-        "editable": bool(text.strip()) and field is False and media is False,
+        "editable": bool(text.strip()) and field is False,
         "reason": reason,
+        "media": media,
         "deleted": deleted,
     }
 
@@ -503,7 +509,12 @@ def _replace_preserving_runs(p_el: Any, text: str, author: str, ts: str, base_id
         return False
     # ★ 原位替换（2026-10-10）：每个原 run 就地换成它的生成块（addprevious 后移除原 run）——
     #   书签/域等非 run 节点的位置一概不动 ⇒ 编辑点之外的文档结构零改变。
+    #   ★★ 媒体锚定（同日，用户需求"图和公式不应修改"）：含图片/公式对象的 run **原位保留、
+    #   一概不动**——它对文字 diff 的贡献为零（drawing/object 不是 w:t），chunks[k] 为空；
+    #   若按普通 run 处理会被当作"无内容"移除 ⇒ 公式/图片丢失（宁可拒绝的初衷就是防这个）。
     for k, r in enumerate(runs):
+        if _has_media(r):
+            continue
         for el in chunks[k]:
             r.addprevious(el)
         r.getparent().remove(r)
