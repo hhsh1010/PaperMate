@@ -5,7 +5,7 @@
 ![Project Type](https://img.shields.io/badge/type-Agent%20Project-blue)
 ![Tech](https://img.shields.io/badge/Python-3.11%2B-green)
 ![Status](https://img.shields.io/badge/status-Design%20Ready-yellow)
-![CI](https://github.com/hhsh1010/papermate/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/hhsh1010/PaperMate/actions/workflows/ci.yml/badge.svg)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
 ---
