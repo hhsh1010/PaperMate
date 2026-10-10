@@ -133,3 +133,6 @@ htmlcov/
 coverage/
 # 全局日志兜底（data/ 已整体忽略，这里覆盖其它位置的 *.log）
 *.log
+
+# Demo 导出产物（scripts/demo_smoke.py 与 .github/workflows/demo.yml 用；CI 作为 artifact 上传）
+demo-artifacts/

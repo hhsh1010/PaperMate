@@ -1,0 +1,50 @@
+name: Demo
+
+# ★ 2026-10-10 建立：仓库里的"小 demo"——在 **GitHub 上**就能看到本项目端到端跑通。
+#
+# 为什么是这样一个工作流（而不是对外暴露一个 URL）：
+#   · 用内置 `fake` 模型 + `fake` 嵌入 ⇒ **不需要任何 API key、不出网、秒级完成**；
+#   · 结果写进 **Job Summary** ⇒ 打开 Actions 页面直接可读（含上传解析 / SSE 事件序列 /
+#     引用溯源 / 改稿修订标记计数 / 双版本导出字节数）；
+#   · 导出的 docx 作为 **artifact** 下载 ⇒ 可亲手验证"改稿真的以 Word 修订痕迹写进去了"。
+
+on:
+  workflow_dispatch: # 手动触发：Actions → Demo → Run workflow
+  push:
+    branches: [main]
+    paths: # 只在 demo 自身相关文件变化时跑（不占日常额度）
+      - "scripts/demo_smoke.py"
+      - ".github/workflows/demo.yml"
+
+concurrency:
+  group: demo-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  demo:
+    name: End-to-end demo (fake model, no API key)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install base deps (frozen lock)
+        run: uv sync --frozen
+      - name: Install lightweight retrieval/parse deps
+        # 与 CI 同口径：faiss/pymupdf/hf-hub 是上传解析与检索的轻量必需（合计 <60MB，非 torch）
+        run: uv pip install faiss-cpu==1.15.0 pymupdf==1.28.2 huggingface-hub==0.36.2
+      - name: Run end-to-end demo → Job Summary
+        run: |
+          set -euo pipefail
+          uv run --frozen python scripts/demo_smoke.py > demo-output.md
+          cat demo-output.md >> "$GITHUB_STEP_SUMMARY"
+          echo "----- demo 输出（同时写入 Job Summary）-----"
+          cat demo-output.md
+      - name: Upload exported docx (修订版 / 干净版)
+        uses: actions/upload-artifact@v4
+        with:
+          name: papermate-demo-exports
+          path: demo-artifacts/*.docx
+          if-no-files-found: warn
