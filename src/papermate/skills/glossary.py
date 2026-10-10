@@ -16,7 +16,30 @@ from papermate.skills._common import is_real_llm, resolve_doc_scope
 
 # 缩写候选：2–6 个连续大写字母（排除常见非术语连词/机构名）
 _ABBR_PAT = re.compile(r"\b[A-Z]{2,6}\b")
-_COMMON_ABBR = {"AND", "OR", "NOT", "THE", "FOR", "IEEE", "ACM", "USA", "UK", "ETC"}
+#: 常见非术语缩写（连词 / 机构 / **文献题录元数据**）。
+# ★★ P-02（2026-10-09）：原先只有连词与机构，实测截图中术语表混进了**刊物题录**类候选：
+#   ACTA / SINICA（刊名）、ISSN（国际刊号）、CN（国内刊号）、TN（中图分类）、OL、DOI、DZXB（刊名缩写）。
+#   ⇒ 按"宁可少列、不列垃圾"（与该技能"严禁编造"的自述一致）扩容白名单。
+_COMMON_ABBR = {
+    "AND", "OR", "NOT", "THE", "FOR", "IEEE", "ACM", "USA", "UK", "ETC",
+    # 文献题录（本次实测混入的那批）
+    "ISSN", "ISBN", "CN", "TN", "OL", "DOI", "URL", "EID", "PII",
+    "ACTA", "SINICA", "DZXB", "SPIE", "CVPR", "ICCV", "ECCV",
+    "PDF", "HTML", "XML", "JSON", "API",
+}
+#: **占位符**（文章编号里的 `XXXX` / `XX`）：全 X 的短串必不是术语。
+_PLACEHOLDER_PAT = re.compile(r"^X{2,}$")
+#: **题录元数据行**特征：命中即**整行**不作候选来源。
+#  ★ 为什么要按"行"判：作者拼音（JIANG / CHENG / YANG）形态上就是普通大写词，
+#    孤立地看无法与真缩写区分；但它们**总是出现在题录行**（与刊名/刊号/DOI/作者标签同行或邻近）⇒
+#    按行剔除既精准又不误伤正文（正文里不会同时出现这些标签）。
+_META_LINE_PAT = re.compile(
+    r"ISSN|ISBN|CN\s*\d|DOI|文章编号|稿件编号|中图分类号|文献标识码|"
+    r"收稿日期|修回日期|基金项目|作者简介|通信作者|E-?mail|"
+    r"\bVol\.|\bNo\.|第\s*\d+\s*卷|第\s*\d+\s*期|"
+    r"ACTA|SINICA|学报|期刊|作者[:：]|单位[:：]",
+    re.IGNORECASE,
+)
 # 括号定义：全称（中文/英文）(Abbreviation) 形式，如「卷积神经网络（CNN）」
 _PAREN_DEF_PAT = re.compile(
     r"([\u4e00-\u9fa5A-Za-z][\u4e00-\u9fa5A-Za-z0-9\-]{1,20})[（(]([A-Za-z][A-Za-z0-9\- ]{1,30})[)）]"
@@ -56,14 +79,30 @@ def _collect_chunks(pipe) -> list[dict]:
     ]
 
 
+def _strip_meta_lines(text: str) -> str:
+    """剔除**题录元数据行**（刊名/刊号/DOI/稿件编号/作者与单位…），其余原样保留。
+
+    ★★ P-02（2026-10-09）：为什么按**整行**剔而不是按词过滤 ——
+      作者姓名拼音（JIANG / CHENG / YANG）形态上就是普通大写词，孤立地看**无法**与真缩写区分；
+      但它们总是出现在题录行（与刊名/刊号/DOI/作者标签同行）⇒ 整行剔除既精准又不误伤正文
+      （正文里不会同时出现这些标签词）。
+    """
+    lines = (text or "").splitlines()
+    return "\n".join(ln for ln in lines if not _META_LINE_PAT.search(ln))
+
+
 def _extract_terms(chunk_texts: list[str]) -> list[dict]:
-    """抽取候选术语：括号定义对 + 纯缩写 + 中文专业术语。返回去重列表（按出现顺序）。"""
+    """抽取候选术语：括号定义对 + 纯缩写 + 中文专业术语。返回去重列表（按出现顺序）。
+
+    ★ P-02：扫描前先 `_strip_meta_lines()` —— 题录区的刊号/刊名缩写/作者拼音不再进入候选。
+    """
     seen: set[str] = set()
     terms: list[dict] = []
     covered_fulls: set[str] = set()  # 已在括号定义中作为「全称」出现的中文短语
 
     # 第一轮：括号定义（中文全称 + 英文缩写）与纯英文缩写
     for t in chunk_texts:
+        t = _strip_meta_lines(t)
         for m in _PAREN_DEF_PAT.finditer(t):
             full, abbr = m.group(1).strip(), m.group(2).strip()
             if len(abbr) < 2 or abbr in seen or abbr in _COMMON_ABBR:
@@ -73,13 +112,14 @@ def _extract_terms(chunk_texts: list[str]) -> list[dict]:
             start = max(0, m.start() - 40)
             terms.append({"term": abbr, "full": full, "context": t[start:m.end()].replace("\n", " ").strip(), "kind": "abbr"})
         for ab in _ABBR_PAT.findall(t):
-            if ab in seen or ab in _COMMON_ABBR:
+            if ab in seen or ab in _COMMON_ABBR or _PLACEHOLDER_PAT.match(ab):
                 continue
             seen.add(ab)
             terms.append({"term": ab, "full": "", "context": "", "kind": "abbr"})
 
     # 第二轮：中文专业术语（未被括号定义覆盖的才加入，避免重复）
     for t in chunk_texts:
+        t = _strip_meta_lines(t)
         for m in _CN_TERM_PAT.finditer(t):
             cn = m.group(1).strip()
             if len(cn) < 4 or cn in seen or cn in _CN_STOPWORDS:
@@ -156,12 +196,15 @@ async def run(ctx: SkillContext) -> SkillResult:
     prompt = (
         "你是学术术语助手。基于下方【论文中抽出的术语及其首次出现上下文】，生成一份术语表。\n"
         "要求：\n"
-        "1. 严格基于提供的上下文，区分「论文自定义术语」与「领域通用术语」；\n"
-        "2. 术语既可能是英文缩写（如 YOLO），也可能是中文专业术语（如 旋转框遥感图像目标检测模型）；"
-        "对中文术语，『缩写/英文』列可填其常见英文表达或『—』；\n"
-        "3. 对一词多义或需结合上下文的缩写注明『需结合上下文』；\n"
-        "4. 给出每个术语的简要中文释义；无法从上下文确定的写『待核实』，严禁编造；\n"
-        "5. 输出 Markdown 表格：| 术语 | 缩写/英文 | 中文释义 | 首次出现页 | 相关概念 |。\n\n"
+        "1. **只能使用下方给出的上下文**；区分「论文自定义术语」与「领域通用术语」，"
+        "但两者都只按上下文陈述；\n"
+        "2. 术语既可能是英文缩写（如 YOLO），也可能是中文专业术语（如 旋转框遥感图像目标检测模型）；\n"
+        "3. ★★ **禁止用先验知识补全**：上下文没给出某缩写的全称/含义时，对应列一律写 `—`"
+        "（如上下文只出现 `YOLO`，就写 `—`，**不得**写“You Only Look Once”）——"
+        "本题只做「按上下文整理」，**不做**知识问答；\n"
+        "4. 对一词多义或需结合上下文的缩写注明『需结合上下文』；\n"
+        "5. 无法从上下文确定的写『待核实』，严禁编造；\n"
+        "6. 输出 Markdown 表格：| 术语 | 缩写/英文 | 中文释义 | 首次出现页 | 相关概念 |。\n\n"
         "【术语与上下文】\n" + "\n".join(rows) + "\n\n请输出术语表："
     )
     try:

@@ -31,6 +31,7 @@ import shutil
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 from lightcore.rag.hf_local import (
     _WEIGHT_FILES as HF_WEIGHT_FILES,  # 与线上推理**同源**的权重文件名表（不另造一份）
@@ -246,6 +247,64 @@ def probe_installed(spec: RagModelSpec, *, resolver=resolve_local_hf_snapshot) -
 # --------------------------------------------------------------------------- #
 # 安装编排（后台线程 + 可轮询状态）
 # --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# P-01（2026-10-09）：**真字节进度**
+#
+# 背景：deps 段（装 torch）uv 不上报进度 ⇒ 全程 `percent=0` ⇒ 前端只能画"不确定动画"；
+#       models 段只有**文件数**进度 ⇒ 单个 2.3GB 权重让进度条 **0→50→100 跳变**。
+#
+# 两段各用一路**真信号**（均已实测验证）：
+#   · deps：**磁盘增量**。`uv` 把字节落到 `<数据根>/uv-cache`，而 venv 安装走**硬链接**
+#     （同盘共享同一份 inode）⇒ 只量 cache 就覆盖全部落盘（实测 30s +400MB，线性可测）。
+#   · models：**模型目录体积**。分母取 `HfApi.model_info(files_metadata=True)` 的精确字节和；
+#     分子取 `<hub>/models--org--name` 的实际体积 —— 它天然包含**进行中的 `.incomplete`
+#     半成品**与**断点续传已存在的部分**，比"已完成文件求和"更真实。
+#
+# ⚠️ 两条诚实边界（守住既有纪律"假装有进度比没有进度更糟"）：
+#   ① 百分比**到 99 封顶**，100 只在阶段真正完成时置位；
+#   ② 量不到（热缓存增量≈0 / 元数据不可用）⇒ `done_bytes=total_bytes=0` ⇒ 前端保持不确定动画。
+# --------------------------------------------------------------------------- #
+#: deps 段期望落盘增量（torch+CUDA 解包后约 4.0GB；实测 venv 0.68GB → 4.7GB）
+_DEPS_EXPECTED_BYTES = 4 * 1024**3
+
+
+def _dir_bytes(path) -> int:
+    """递归求目录占用（字节）。**一切异常都吞掉** —— 量不到就返回已累计值，绝不中断安装。"""
+    total = 0
+    stack = [Path(path)]
+    while stack:
+        d = stack.pop()
+        try:
+            with os.scandir(d) as it:
+                for e in it:
+                    try:
+                        if e.is_dir(follow_symlinks=False):
+                            stack.append(Path(e.path))
+                        elif e.is_file(follow_symlinks=False):
+                            total += e.stat(follow_symlinks=False).st_size
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return total
+
+
+def _pct_from_bytes(done: int, total: int, *, base: float = 0.0, span: float = 100.0) -> float:
+    """字节进度 → 百分比（**纯函数**，单测直接覆盖）。
+
+    - `total <= 0` 或 `done <= 0` ⇒ `0.0`（= 信号不可用，前端保持不确定态）
+    - 封顶 `base + span*0.99`：真实完成由调用方置 100，**进度条不假装跑完**
+    """
+    if total <= 0 or done <= 0:
+        return 0.0
+    return round(base + span * min(min(done / total, 1.0), 0.99), 1)
+
+
+def _model_hub_dir(repo_id: str) -> Path:
+    """某模型在 HF hub 缓存里的目录（`models--org--name`）——与线上推理同一布局。"""
+    return Path(default_hub_cache_dir()) / f"models--{repo_id.replace('/', '--')}"
+
+
 def _idle_state() -> dict:
     return {
         "status": "idle",        # idle | running | success | cancelled | error
@@ -258,6 +317,9 @@ def _idle_state() -> dict:
         "file_index": 0,
         "file_total": 0,
         "percent": 0.0,
+        # ★ P-01：真字节进度（`total_bytes=0` ⇒ 信号不可用，前端用不确定动画）
+        "done_bytes": 0,
+        "total_bytes": 0,
         "message": "",
         "error": None,
         "started_at": None,
@@ -381,6 +443,35 @@ class ModelInstaller:
         with self._lock:
             self._state.update(kw)
 
+    def _spawn_sampler(
+        self,
+        watch: Path,
+        *,
+        base_bytes: int,
+        total_bytes: int,
+        base_pct: float = 0.0,
+        span: float = 100.0,
+        interval: float = 3.0,
+    ) -> threading.Event:
+        """启动后台采样线程：按**目录体积增量**更新 `done_bytes/percent`。
+
+        ⚠️ 调用方**必须**在阶段结束时 `stop.set()`（用 try/finally），否则线程会一直扫目录。
+        线程是 daemon 且只做"量目录 + 写状态"，任何异常都被 `_dir_bytes` 吞掉 ⇒ 不影响安装。
+        """
+        stop = threading.Event()
+
+        def loop() -> None:
+            while not stop.wait(interval):
+                done = max(0, _dir_bytes(watch) - base_bytes)
+                self._set(
+                    done_bytes=done,
+                    total_bytes=total_bytes,
+                    percent=_pct_from_bytes(done, total_bytes, base=base_pct, span=span),
+                )
+
+        threading.Thread(target=loop, name="rag-install-progress", daemon=True).start()
+        return stop
+
     def _worker(self, keys: list[str], cancel: threading.Event) -> None:
         try:
             # ── 阶段 1/2：运行环境（重依赖，约 4GB）──────────────────────────────
@@ -388,12 +479,29 @@ class ModelInstaller:
             # 所以第一次点「下载」必须先把依赖补齐，否则 BGE-M3 根本 import 不了。
             # 开发机/服务端依赖已齐 ⇒ 直接跳过，不产生任何额外下载。
             if not rag_deps.probe().ready:
-                self._set(phase="deps", percent=0.0, current=None, current_file=None,
+                self._set(phase="deps", percent=0.0, done_bytes=0, total_bytes=0,
+                          current=None, current_file=None,
                           message="正在准备运行环境（安装 torch 等重依赖，约 4GB，请保持联网）…")
                 if cancel.is_set():
                     raise InstallCancelled()
-                rag_deps.sync_heavy_deps(cancel=cancel)
-                self._set(percent=100.0, message="运行环境准备完成，开始下载模型权重…")
+                # ★ P-01：deps 段用**磁盘增量**做真进度（uv 不上报）。
+                #   量 uv-cache：venv 安装走硬链接、与 cache 共享同一份数据 ⇒ 增量只体现在 cache。
+                #   量不到（如热缓存增量≈0）⇒ 保持 0 ⇒ 前端落回不确定动画（不造假）。
+                watch = rag_deps.uv_cache_dir()
+                stop = (
+                    self._spawn_sampler(
+                        Path(watch), base_bytes=_dir_bytes(watch), total_bytes=_DEPS_EXPECTED_BYTES
+                    )
+                    if watch is not None
+                    else None
+                )
+                try:
+                    rag_deps.sync_heavy_deps(cancel=cancel)
+                finally:
+                    if stop is not None:
+                        stop.set()
+                self._set(percent=100.0, done_bytes=0, total_bytes=0,
+                          message="运行环境准备完成，开始下载模型权重…")
 
             # ── 阶段 2/2：模型权重（约 4.5GB）──────────────────────────────
             n = len(keys)
@@ -449,21 +557,49 @@ class ModelInstaller:
         if not wanted:
             raise ModelInstallError(f"仓库 {spec.repo_id} 中没有匹配到需要的文件（仓库结构可能已变）")
 
+        # ★ P-01：拿**精确字节数**当分母（原先只有"文件数"⇒ 单个 2.3GB 权重造成 0→50→100 跳变）。
+        #   元数据不可用（网络/字段缺失）⇒ total_bytes=0 ⇒ 自动退回文件数进度，**不阻断下载**。
+        total_bytes = 0
+        try:
+            info = HfApi().model_info(spec.repo_id, files_metadata=True)
+            sizes = {s.rfilename: int(s.size or 0) for s in (info.siblings or [])}
+            total_bytes = sum(sizes.get(f, 0) for f in wanted)
+        except Exception as e:  # noqa: BLE001
+            logger.info("模型 %s 的文件大小元数据不可用（%s），退回文件数进度", spec.key, e)
+
+        # ★ P-01：采样器量**模型目录体积**——天然含 `.incomplete` 半成品与断点续传已存在的部分
+        stop = None
+        if total_bytes > 0:
+            self._set(done_bytes=0, total_bytes=total_bytes)
+            stop = self._spawn_sampler(
+                _model_hub_dir(spec.repo_id),
+                base_bytes=0,
+                total_bytes=total_bytes,
+                base_pct=base,
+                span=span,
+            )
+
         # ③ 逐文件下载：可中断 / 可容错 / 断点续传（已缓存的直接返回本地路径）
         got: list[str] = []
         failures: list[str] = []
-        for i, name in enumerate(wanted, 1):
-            if cancel.is_set():
-                raise InstallCancelled()
-            self._set(current_file=name, file_index=i, file_total=len(wanted),
-                      percent=round(base + span * (i - 1) / len(wanted), 1),
-                      message=f"下载 {spec.label}（{i}/{len(wanted)}）")
-            try:
-                hf_hub_download(spec.repo_id, name)
-                got.append(name)
-            except Exception as e:  # noqa: BLE001  单个文件失败不整体 abort
-                failures.append(f"{name}（{type(e).__name__}）")
-                logger.warning("模型文件下载失败 %s/%s：%s", spec.repo_id, name, e)
+        try:
+            for i, name in enumerate(wanted, 1):
+                if cancel.is_set():
+                    raise InstallCancelled()
+                self._set(current_file=name, file_index=i, file_total=len(wanted),
+                          # 有字节分母时 percent 由采样线程驱动（文件数只作辅助显示）；
+                          # 无分母才退回旧的"文件数"口径（诚实降级）。
+                          **({} if total_bytes > 0 else {"percent": round(base + span * (i - 1) / len(wanted), 1)}),
+                          message=f"下载 {spec.label}（{i}/{len(wanted)}）")
+                try:
+                    hf_hub_download(spec.repo_id, name)
+                    got.append(name)
+                except Exception as e:  # noqa: BLE001  单个文件失败不整体 abort
+                    failures.append(f"{name}（{type(e).__name__}）")
+                    logger.warning("模型文件下载失败 %s/%s：%s", spec.repo_id, name, e)
+        finally:
+            if stop is not None:
+                stop.set()
         if cancel.is_set():
             raise InstallCancelled()
 

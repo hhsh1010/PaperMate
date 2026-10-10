@@ -598,3 +598,67 @@ def test_api_fake_always_allowed(client, monkeypatch):
     r = client.put("/api/v1/settings", json={"rag_embedder": "fake", "use_jieba": True})
     assert r.status_code == 200, r.text
     assert r.json()["rag_embedder"] == "fake"
+
+
+# --------------------------------------------------------------------------- #
+# P-01（2026-10-09）：**真字节进度**
+#
+# 覆盖三件事：①百分比换算边界（0 / 半 / 超量封顶 / 无分母）
+#            ②目录体积测量的容错（缺路径不许抛——安装绝不因"量不到"而中断）
+#            ③接线存在（两段都必须启动采样器、且都必须收尾停表）
+# --------------------------------------------------------------------------- #
+class TestByteProgress:
+    def test_pct_edges(self):
+        assert mi._pct_from_bytes(0, 100) == 0.0  # 还没动
+        assert mi._pct_from_bytes(50, 100) == 50.0
+        assert mi._pct_from_bytes(200, 100) == 99.0, "★ 封顶 99：100 只在阶段真正完成时置位"
+        assert mi._pct_from_bytes(10, 0) == 0.0, "无分母 ⇒ 信号不可用（前端保持不确定动画）"
+        assert mi._pct_from_bytes(0, 0) == 0.0
+
+    def test_pct_respects_base_span(self):
+        """models 段把整轮切成区间：第二个模型应从 base 起算（不从头开始）。"""
+        assert mi._pct_from_bytes(50, 100, base=50.0, span=50.0) == 75.0
+
+    def test_dir_bytes_counts_nested_files(self, tmp_path):
+        (tmp_path / "a").mkdir()
+        (tmp_path / "a" / "x.bin").write_bytes(b"0" * 100)
+        (tmp_path / "b").mkdir()
+        (tmp_path / "b" / "y.bin").write_bytes(b"0" * 23)
+        assert mi._dir_bytes(tmp_path) == 123
+
+    def test_dir_bytes_tolerates_missing_path(self, tmp_path):
+        assert mi._dir_bytes(tmp_path / "nope") == 0, "缺路径不得抛（否则安装会被测量错误打断）"
+
+    def test_model_hub_dir_matches_hf_layout(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HF_HOME", str(tmp_path / "huggingface"))
+        d = mi._model_hub_dir("BAAI/bge-m3")
+        assert d.name == "models--BAAI--bge-m3", "必须与线上推理同一缓存布局"
+        assert str(d).startswith(str(tmp_path / "huggingface"))
+
+
+class TestByteProgressWiring:
+    """防"测了但没接上"（本项目反复踩过的失效模式）。"""
+
+    @staticmethod
+    def _src() -> str:
+        from pathlib import Path
+
+        return Path(mi.__file__).read_text(encoding="utf-8")
+
+    def test_two_segments_have_samplers(self):
+        src = self._src()
+        assert "rag_deps.uv_cache_dir()" in src, "deps 段必须量 uv-cache（venv 走硬链接，增量只体现在 cache）"
+        assert "_DEPS_EXPECTED_BYTES" in src
+        assert src.count("_spawn_sampler(") >= 2, "deps 与 models 两段都应启动采样"
+
+    def test_models_segment_uses_real_byte_metadata(self):
+        assert "files_metadata=True" in self._src(), (
+            "models 段必须取精确文件大小作分母（否则仍会 0→50→100 跳变）"
+        )
+
+    def test_samplers_are_stopped(self):
+        assert self._src().count("stop.set()") >= 2, "每个采样器都必须收尾停表（try/finally）"
+
+    def test_state_carries_byte_fields(self):
+        st = mi._idle_state()
+        assert st["done_bytes"] == 0 and st["total_bytes"] == 0, "状态字典必须带字节字段（响应模型靠它）"

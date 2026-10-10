@@ -23,6 +23,7 @@ from lightcore.llm.router import (
 from ..memory_hub import reset_memory_manager
 from ..runtime_settings import get_state, public_view, rules_token_limit, update
 from ..schemas import (
+    FigureInstallStatusOut,
     InventoryOut,
     RagInstallReq,
     RagInstallStatusOut,
@@ -31,6 +32,7 @@ from ..schemas import (
     SettingsTestOut,
     WebSearchTestOut,
 )
+from ..services import figure_deps
 from ..services.model_installer import (
     AlreadyRunning,
     ModelInstallError,
@@ -380,6 +382,54 @@ def cancel_rag_models_install() -> dict:
 def rag_models_install_status() -> dict:
     """轮询安装进度。首次安装的初始状态为 `idle`。"""
     return get_model_installer().task()
+
+
+# --------------------------------------------------------------------------- #
+# 图片增强（Level 2）依赖：**按需安装**（2026-10-09 新增）
+#
+# 背景：`[figure]` extra（paddleocr + paddlepaddle + transformers + torch + pillow）
+# 与 `[rag]` 分离（pyproject 注释：避免拖重核心 RAG 安装）⇒ 需要独立的按需安装通道。
+# 此前应用内**没有任何入口** ⇒ 用户打开「图片增强」后 OCR 永远不生效（实测反馈）。
+# --------------------------------------------------------------------------- #
+@router.get("/settings/figure-enrich/deps", response_model=dict)
+def figure_enrich_deps() -> dict:
+    """**实时**探测图片增强三能力（`{ocr, table, vlm}`，不做任何缓存）。
+
+    ★ 为什么要独立端点：探测结果原先只随 `/settings` 一次性返回，而前端设置上下文
+    **只在 SPA 挂载时拉一次** ⇒ 装完依赖后提示不更新（实测「torch 已装却显示未装」）。
+    设置页进入时 / 安装完成后调用本端点即可拿到当前真值。
+    """
+    return figure_deps.probe()
+
+
+@router.post("/settings/figure-enrich/install", response_model=FigureInstallStatusOut)
+def install_figure_deps() -> dict:
+    """触发后台安装（立即返回，前端轮询 `/install/status`）。
+
+    - 409：已有任务在跑（前端应先禁用按钮或提示先取消）；
+    - 安装内容：`uv sync --extra figure --frozen --inexact`
+      （2026-10-09 实测：**下载 ≈150~250MB · 落盘 ≈559MB · 73.6s / 25 包**；
+      若尚未「准备运行环境」，会一并补齐 torch 等重依赖 —— figure 与 rag 共享 torch）。
+    """
+    try:
+        return figure_deps.get_figure_installer().install()
+    except figure_deps.AlreadyRunning as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+
+
+@router.post("/settings/figure-enrich/install/cancel", response_model=FigureInstallStatusOut)
+def cancel_figure_deps_install() -> dict:
+    """取消安装（在**当前 uv 命令返回后**生效，已下载部分保留在缓存以便重试）。"""
+    try:
+        return figure_deps.get_figure_installer().cancel()
+    except figure_deps.AlreadyRunning as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+
+
+@router.get("/settings/figure-enrich/install/status", response_model=FigureInstallStatusOut)
+def figure_deps_install_status() -> dict:
+    """轮询图片增强依赖安装进度。"""
+    return figure_deps.get_figure_installer().task()
 
 
 @router.get("/settings/inventory", response_model=InventoryOut)

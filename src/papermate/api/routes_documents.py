@@ -25,6 +25,8 @@ from ..schemas import (
     DocTextOut,
     DocumentOut,
     EditApplyOut,
+    ExportToIn,
+    ExportToOut,
     OkOut,
     PrecheckOut,
     ReindexOut,
@@ -32,6 +34,7 @@ from ..schemas import (
     UploadProgressOut,
 )
 from ..services import docx_edit
+from .dest_path import require_abs_dest
 from .pagination import DEFAULT_LIMIT, LimitParam, OffsetParam
 
 logger = logging.getLogger(__name__)
@@ -381,25 +384,19 @@ def restore_doc_backup(doc_id: int, request: Request, background_tasks: Backgrou
     return out
 
 
-@router.get("/documents/{doc_id}/download")
-def export_document(doc_id: int, request: Request, mode: str = Query("tracked")) -> Response:
-    """修改后保存导出（C4 增补）。注意路径为 /download —— /export 已被格式转换导出占用。
+def _build_export(svc, doc_id: int, mode: str) -> tuple[bytes, str]:
+    """产出文档导出件（字节 + 建议文件名）。
 
-    - ``mode=tracked``（默认带痕版）：下载当前文件 —— 修订痕迹完整保留，Word 中可继续接受/拒绝；
-    - ``mode=clean``（干净版）：接受全部修订后的 docx（ins 解包、del 移除），仅 .docx 支持。
-
-    以附件（attachment）形式触发浏览器下载；文件名沿用文档名（干净版加后缀）。
+    ★ P-04（2026-10-09）：`/download`（浏览器）与 `/export-to`（桌面「另存为」）**共用本函数** ——
+    两套实现必然漂移（本项目"同源纪律"）。
     """
-    svc = request.app.state.doc_svc
     doc = svc.get_document(doc_id)
     path = svc.storage_path(doc_id)
     if doc is None or path is None:
         raise HTTPException(status_code=404, detail="文档不存在或原文件已丢失")
 
-    from urllib.parse import quote
-
     if mode == "tracked":
-        return FileResponse(path, filename=doc.filename, content_disposition_type="attachment")
+        return Path(path).read_bytes(), doc.filename
     if mode != "clean":
         raise HTTPException(status_code=400, detail=f"mode 仅支持 tracked / clean，收到：{mode!r}")
 
@@ -411,12 +408,45 @@ def export_document(doc_id: int, request: Request, mode: str = Query("tracked"))
         raise HTTPException(status_code=500, detail=f"导出失败：{e}") from e
 
     stem = Path(doc.filename).stem or "document"
-    out_name = f"{stem}_干净版.docx"
+    return data, f"{stem}_干净版.docx"
+
+
+@router.get("/documents/{doc_id}/download")
+def export_document(doc_id: int, request: Request, mode: str = Query("tracked")) -> Response:
+    """修改后保存导出（C4 增补）。注意路径为 /download —— /export 已被格式转换导出占用。
+
+    - ``mode=tracked``（默认带痕版）：下载当前文件 —— 修订痕迹完整保留，Word 中可继续接受/拒绝；
+    - ``mode=clean``（干净版）：接受全部修订后的 docx（ins 解包、del 移除），仅 .docx 支持。
+
+    以附件（attachment）形式触发浏览器下载；文件名沿用文档名（干净版加后缀）。
+    ⚠️ 桌面端（Tauri/WebView2）里这条路径**没有可见反馈**（静默落到系统下载文件夹）
+    ⇒ 桌面端请改用 ``POST /documents/{id}/export-to``（原生「另存为」）。
+    """
+    svc = request.app.state.doc_svc
+    data, out_name = _build_export(svc, doc_id, mode)
+
+    from urllib.parse import quote
+
     return Response(
         content=data,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(out_name)}"},
     )
+
+
+@router.post("/documents/{doc_id}/export-to", response_model=ExportToOut)
+def export_document_to(doc_id: int, body: ExportToIn, request: Request) -> dict:
+    """把导出件写到 `dest`（**路径由前端原生「另存为」对话框选定**）。
+
+    ★ P-04（2026-10-09，用户拍板 C 方案）：桌面端点「下载修订版/干净版」原先靠 `<a download>`，
+    在 Tauri 里**静默落盘、界面零反馈**（实测用户连点 12 次）⇒ 改为
+    「另存为 → 后端写盘 → 前端提示最终路径」。与 `/download` 共用 `_build_export`（同源）。
+    """
+    dest = require_abs_dest(body.dest)
+    svc = request.app.state.doc_svc
+    data, _name = _build_export(svc, doc_id, body.mode)
+    dest.write_bytes(data)
+    return {"path": str(dest), "bytes": len(data)}
 
 
 @router.post("/documents/{doc_id}/reindex", response_model=DocumentOut)

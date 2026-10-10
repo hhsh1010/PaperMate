@@ -36,6 +36,7 @@ from .routes_collections import router as collections_router
 from .routes_documents import router as documents_router
 from .routes_eval import router as eval_router
 from .routes_feedback import router as feedback_router
+from .routes_files import router as files_router
 from .routes_memory import router as memory_router
 from .routes_metrics import router as metrics_router
 from .routes_processing import router as processing_router
@@ -193,6 +194,7 @@ def create_app() -> FastAPI:
     app.include_router(summary_router, prefix="/api/v1")
     app.include_router(traces_router, prefix="/api/v1")
     app.include_router(feedback_router, prefix="/api/v1")
+    app.include_router(files_router, prefix="/api/v1")  # P-05：「另存为」落盘口
     app.include_router(memory_router, prefix="/api/v1")
     app.include_router(metrics_router, prefix="/api/v1")
     app.include_router(workspaces_router, prefix="/api/v1")

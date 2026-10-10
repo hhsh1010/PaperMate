@@ -965,9 +965,15 @@ class RagInstallReq(BaseModel):
 class RagInstallStatusOut(BaseModel):
     """安装任务状态（轮询用）。
 
-    ⚠️ `percent` 是**文件数进度**（非字节进度）：HF 下载以文件为单位，
-    单个 2GB 权重在下完之前这一档不会动 —— 前端请把文案写成「正在下载第 i/N 个文件」，
-    不要显示会中途跳变的百分比条。
+    ★ P-01（2026-10-09）：**进度口径已从"文件数"升级为"字节"** ——
+      `done_bytes` / `total_bytes` 由后端按真信号测量：
+      deps 段量 `uv-cache` **磁盘增量**（venv 走硬链接，共享同一份数据），
+      models 段量**模型目录体积**（含 `.incomplete` 半成品与断点续传已存在的部分）。
+      ⇒ 前端在 `total_bytes > 0` 时**可以**显示百分比条（两段都行）。
+    ⚠️ `total_bytes == 0` 表示**信号不可用**（热缓存增量≈0 / 元数据缺失）⇒ 前端保持
+      "不确定动画"，**不要**把 0 当成 0% 进度（那是"假装有进度"，本项目明确禁止）。
+    ⚠️ `percent` 仍保留：它是**阶段内的合成百分比**（deps 段按字节增量估、models 段优先
+      按字节、无字节分母时才退回文件数）；`file_index/file_total` 退化为辅助显示。
     """
 
     status: str          # idle | running | success | cancelled | error
@@ -981,6 +987,9 @@ class RagInstallStatusOut(BaseModel):
     file_index: int = 0
     file_total: int = 0
     percent: float = 0.0
+    #: ★ P-01：真字节进度（0 = 信号不可用 ⇒ 前端用不确定动画）
+    done_bytes: int = 0
+    total_bytes: int = 0
     message: str = ""
     error: str | None = None
     elapsed_s: float = 0.0
@@ -990,6 +999,53 @@ class RagInstallStatusOut(BaseModel):
 # ★ 响应模型里**必须逐个声明**字段：未声明的会被 `response_model` **静默裁掉**
 #   （本项目已知坑：ParaTransformOut / EvalCaseOut 因此漏过字段，
 #    表现为"后端明明返回了、前端永远读不到"）。
+
+
+# ───────────────────── 「另存为」导出（P-04/P-05，2026-10-09）─────────────────────
+# ★ 背景：桌面端（Tauri/WebView2）里 `<a download>` 是**静默落盘到系统下载文件夹**、
+#   界面零反馈（实测：用户以为无效、连点 12 次）⇒ 改为
+#   「前端弹原生另存为对话框 → 交给后端写盘 → 前端提示最终路径」。
+#   路径校验统一走 `api/dest_path.require_abs_dest`（只写不读、拒绝相对路径）。
+class ExportToIn(BaseModel):
+    """文档导出件的落盘请求（`dest` 由用户的原生「另存为」对话框选定）。"""
+
+    dest: str
+    mode: str = "tracked"  # tracked（带修订痕迹）| clean（接受全部修订）
+
+
+class ExportToOut(BaseModel):
+    path: str
+    bytes: int
+
+
+class WriteFileIn(BaseModel):
+    """**前端生成**字节的落盘请求（CSV / JSONL / Markdown 等）。"""
+
+    dest: str
+    content_b64: str
+
+
+class WriteFileOut(BaseModel):
+    path: str
+    bytes: int
+
+
+class FigureInstallStatusOut(BaseModel):
+    """图片增强依赖安装状态（设置页轮询用，2026-10-09 新增）。
+
+    ★ 与 RAG 安装（deps → models 两阶段）不同：这里**只有"装包"一段**
+    （`uv sync --extra figure --frozen --inexact`）；PP-OCR 的模型权重由
+    paddleocr 在**首次使用时**自行下载，不在本流程内。
+    """
+
+    status: str  # idle | running | success | cancelled | error
+    message: str = ""
+    error: str | None = None
+    started_at: float | None = None
+    finished_at: float | None = None
+    elapsed_s: float = 0.0
+    #: 安装结束后的三能力快照 `{ocr, table, vlm}`（运行中为 None）
+    deps: dict | None = None
 
 
 class StorageDrive(BaseModel):

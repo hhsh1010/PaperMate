@@ -33,6 +33,39 @@ logger = logging.getLogger("lightcore.rag.figure_content")
 # 在首次 import paddleocr/paddlex 前禁用默认 oneDNN 绕过；用户显式设置过该变量时尊重用户。
 os.environ.setdefault("PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT", "False")
 
+
+def _apply_paddlex_env_defaults() -> None:
+    """把 PaddleX（OCR / 表格结构）的**缓存根**与**模型源**收敛到本项目口径。
+
+    幂等；**不覆盖**用户显式设置（全走 setdefault / 空值判断）。
+
+    ★★ 为什么必须收敛（2026-10-09 P-07，端到端实测暴露）：
+    1. **损坏残留 ⇒ 永久失败（死循环）**：默认缓存根是 `~/.paddlex`（用户全局），
+       本机实测存在 2026-08/09 遗留的**半残模型目录**（`PP-OCRv6_medium_{det,rec}` 各仅 1MB：
+       README + `inference.json`，**缺 `inference.pdiparams` 权重**）。而 PaddleX 的判据是
+       **"目录存在即跳过下载"**（`paddleX/inference/utils/official_models.py:945` 原文
+       "Model files already exist…please delete the directory manually"）⇒ 加载器永远报
+       `No valid PaddlePaddle model found`，**用户看到的只是"OCR 装了却不工作"**。
+       ⇒ 收敛到**专属缓存根**后，这类"外部残留"再也无法污染本应用（与本项目 HF 侧
+       `hf_local.default_hub_cache_dir()` 的"缓存根唯一口径"一致；**禁硬编码 `~`**）。
+    2. **默认模型源是 huggingface**（`paddlex/utils/flags.py:72`）⇒ 国内首次 OCR 走 HF
+       （慢/可能失败）。实测切 **ModelScope ≈41MB/s**；`modelscope` 已是 `paddleocr` 依赖，无需额外安装。
+    """
+    if not os.environ.get("PADDLE_PDX_CACHE_HOME", "").strip():
+        # 与 HF 缓存**同根**：`<default_hub_cache_dir() 的父目录>/paddlex-cache`
+        #   桌面端 HF_HOME = `<数据根>/huggingface` ⇒ 实际落在 `<数据根>/huggingface/paddlex-cache`
+        #   开发机未设 HF_HOME ⇒ `~/.cache/huggingface/paddlex-cache`
+        from .hf_local import default_hub_cache_dir
+
+        os.environ["PADDLE_PDX_CACHE_HOME"] = str(
+            Path(default_hub_cache_dir()).parent / "paddlex-cache"
+        )
+    os.environ.setdefault("PADDLE_PDX_MODEL_SOURCE", "ModelScope")
+
+
+# ★ 必须在**首次 import paddleocr/paddlex 之前**执行（paddlex 在导入期读取这两个变量）
+_apply_paddlex_env_defaults()
+
 #: 支持的图片 MIME（用于 VLM data URL）
 _IMAGE_MIME = {
     ".png": "image/png",

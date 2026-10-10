@@ -6,9 +6,11 @@ P1-a 的占用率只存在于**当轮** SSE 的 `done` 事件里 ⇒ 刷新 / �
 （与 `history.ts` 的 B2-X1 引用卡片同类）。修法：落进既有 `meta_json`（零 DDL）。
 
 ## ⚠️ 诚实边界：为什么这里只有**源码契约**、没有行为测试
-`_persist_meta` / `_ctx_usage_from_done` / `_ctx_usage_from_events` 都定义在
+`_persist_meta` / `_ctx_usage_from_done` 都定义在
 `stream_message()` 的**闭包内**（`routes_search.py:610+`，父容器是行 428 的路由函数）
 ⇒ **无法 import**，也就无法单元测试其行为。
+（★ P-03 2026-10-09：原第三个闭包 `_ctx_usage_from_events` 已删除 —— 它的唯一调用方
+ 是技能路径，而该路径的 `events` 收集器恒为空 ⇒ 接上但永远拿不到数；详见源码处注释。）
 
 ⇒ 折中：本文件用**源码契约**守住"接线没断 + 合并不污染 invalid"这两件**结构事实**；
    「回填后前端能否正确显示」由 `web/src/lib/ctxUsageHistory.test.ts` 的**行为测试**覆盖
@@ -35,11 +37,31 @@ class TestPersistWiring:
     def test_both_persist_points_pass_ctx(self, src: str):
         """两处落库点（技能/流式路径）都必须把占用率传进 meta。
 
-        - `gen()`：用 `_ctx_usage_from_events(events)`
-        - `_watch_agent()`：用 `_ctx_usage_from_done(done_data)`（它直接有 done_data）
+        ★ P-03（2026-10-09）更新：技能路径**不再**走 `_ctx_usage_from_events(events)`
+        （技能分支 events 恒为空 ⇒ 恒返回 `{}`，等于"接了但没数据"），
+        改为直接用 `_UsageRecorder` 捕获的 `_ctx_payload`（与实时 done 同源）。
         """
-        assert "ctx=_ctx_usage_from_events(events)" in src, "gen 路径没接占用率"
+        assert "ctx=_ctx_usage_from_done(_ctx_payload)" in src, "技能路径没接占用率"
         assert "ctx=_ctx_usage_from_done(done_data)" in src, "流式路径没接占用率"
+
+    def test_skill_done_event_carries_ctx(self, src: str):
+        """★ P-03 新增：技能轮的 `done` 事件必须带上 `**_ctx_payload`。
+
+        为什么必须守住：历史回填（meta）与**当轮实时**（done）是两条独立路径，
+        只修一条仍会出现"当轮看得到、刷新即消失"（或反过来）。两条都要接。
+
+        反面约束：注入必须**条件化**（`peak_prompt_tokens > 0` 才进 payload）——
+        若硬写 `peak_prompt_tokens: 0`，前端 `done?.peak_prompt_tokens ?? ctx?.peak`
+        会被 `0` 短路，把"无数据"显示成 0%。
+        """
+        assert "**_ctx_payload," in src, "技能轮 done 没带上下文占用"
+        assert "if recorder is not None and recorder.peak_prompt_tokens > 0:" in src, (
+            "注入必须条件化（peak>0），否则前端会把「无数据」当 0% 渲染"
+        )
+        # 旧接线必须绝迹：events 收集器在技能分支恒为空 ⇒ 再接它等于接了空
+        assert "ctx=_ctx_usage_from_events(events)" not in src, (
+            "技能路径又接回了恒空的 events 收集器（P-03 已证伪该接线）"
+        )
 
     def test_zero_cost_path_deliberately_not_wired(self, src: str):
         """直答路径（`_pump_direct`）**刻意不接**：它不走 loop ⇒ 没有峰值这个概念。
@@ -51,8 +73,11 @@ class TestPersistWiring:
         assert "history, [], final_text, model," in src
 
     def test_helpers_exist(self, src: str):
-        for name in ("_ctx_usage_from_done", "_ctx_usage_from_events"):
-            assert f"def {name}(" in src, f"缺少 {name}"
+        # ★ P-03：`_ctx_usage_from_events` 已删除（唯一调用方是恒空的技能 events 路径）
+        assert "def _ctx_usage_from_done(" in src, "缺少 _ctx_usage_from_done"
+        assert "def _ctx_usage_from_events(" not in src, (
+            "_ctx_usage_from_events 被重新引入 —— 它对技能路径恒返回空，勿再使用"
+        )
 
 
 class TestMergeDoesNotPolluteInvalid:

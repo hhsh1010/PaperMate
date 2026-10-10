@@ -211,3 +211,54 @@ def test_upload_with_figure_enrich_enabled_degrades(client_with_enrich):
     meta = _json.loads(fig_chunks[0].meta_json)
     assert "ocr_text" in meta and "table_md" in meta
     assert meta["ocr_text"] == "" and meta["table_md"] == ""
+
+
+# --------------------------------------------------------------------------- #
+# P-07（2026-10-09）：PaddleX 缓存根 / 模型源收敛
+#
+# 为什么必须有这组测试：这两个 env 决定 ①OCR 模型落在哪（外部残留能否污染本应用）
+# ②首次下载走哪个源（国内可用性）。**设错了不会有任何运行时报错**——表现只是
+# "OCR 静默不工作"或"下载极慢"，正是本项目最警惕的静默失效（P-07 端到端实测踩到过）。
+# --------------------------------------------------------------------------- #
+class TestPaddlexEnvDefaults:
+    def _mod(self):
+        from lightcore.rag import figure_content
+
+        return figure_content
+
+    def test_cache_home_follows_hf_root(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("PADDLE_PDX_CACHE_HOME", raising=False)
+        monkeypatch.setenv("HF_HOME", str(tmp_path / "huggingface"))
+        self._mod()._apply_paddlex_env_defaults()
+        assert os.environ["PADDLE_PDX_CACHE_HOME"] == str(
+            tmp_path / "huggingface" / "paddlex-cache"
+        ), (
+            "缓存根必须与 HF **同根**（<HF_HOME>/paddlex-cache）——否则用户全局 ~/.paddlex 里的"
+            "损坏残留会再次污染本应用（P-07 实测：半残模型目录 ⇒ 永久 'No valid PaddlePaddle model found'）"
+        )
+
+    def test_never_overrides_explicit_user_settings(self, monkeypatch):
+        monkeypatch.setenv("PADDLE_PDX_CACHE_HOME", r"D:\custom\pdx")
+        monkeypatch.setenv("PADDLE_PDX_MODEL_SOURCE", "huggingface")
+        self._mod()._apply_paddlex_env_defaults()
+        assert os.environ["PADDLE_PDX_CACHE_HOME"] == r"D:\custom\pdx", "不得覆盖用户显式设置"
+        assert os.environ["PADDLE_PDX_MODEL_SOURCE"] == "huggingface", "不得覆盖用户显式设置"
+
+    def test_model_source_default_is_modelscope(self, monkeypatch):
+        monkeypatch.delenv("PADDLE_PDX_MODEL_SOURCE", raising=False)
+        self._mod()._apply_paddlex_env_defaults()
+        assert os.environ["PADDLE_PDX_MODEL_SOURCE"] == "ModelScope", (
+            "默认必须是 ModelScope：paddlex 自身默认 huggingface，国内首次 OCR 会慢/失败"
+            "（2026-10-09 实测 ModelScope ≈41MB/s）"
+        )
+
+    def test_module_level_call_exists(self):
+        """防"函数写了但没接上"：必须在**模块导入期**调用（paddlex 在导入期读这两个变量）。"""
+        src = (
+            Path(__file__).resolve().parents[1]
+            / "src"
+            / "lightcore"
+            / "rag"
+            / "figure_content.py"
+        ).read_text(encoding="utf-8")
+        assert "\n_apply_paddlex_env_defaults()\n" in src, "模块级未调用 ⇒ 两个 env 不会生效"

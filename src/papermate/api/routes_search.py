@@ -621,7 +621,8 @@ async def stream_message(session_id: int, body: ChatRequest, request: Request) -
         它只是**提示性**标记：告诉用户"这轮回答要核对引用"。
 
         ★ P1-a2（2026-10-03）：`ctx` = 上下文占用（`ctx_peak`/`ctx_budget`/`ctx_warn_at`），
-        用于**刷新后回填**占用率（理由见 `_ctx_usage_from_events`）。
+        用于**刷新后回填**占用率（解析口径见 `_ctx_usage_from_done`；技能/流式两条路径
+        现在都用它，见 P-03 2026-10-09）。
 
         ★ P0-2（2026-10-03）：`extra` = **其它中性观测**（当前是 `unrecognized_command`）。
         ⚠️ 与 `ctx` 一样**只做普通合并**，**绝不夹带 `invalid`** ——
@@ -666,23 +667,14 @@ async def stream_message(session_id: int, body: ChatRequest, request: Request) -
                 out["ctx_breakdown"] = clean
         return out
 
-    def _ctx_usage_from_events(events: list | None) -> dict:
-        """从本轮事件里找 `done`，再抽「上下文占用」数（P1-a2，2026-10-03）。
-
-        ## 为什么必须落库
-        `done` 事件只存在于**当轮**的 SSE 流里；刷新页面 / 切换会话后，历史消息走
-        `MessageOut`，而它**没有 `done` 字段** ⇒ 占用率会"**当轮看得到、刷新即消失**"
-        —— 与 `history.ts` 里记录过的 B2-X1（引用卡片刷新即消失）是**同一类缺陷**。
-        ⇒ 复用既有 `meta_json`（**零 DDL**，与 invalid/notice/model_risk 同处）。
-
-        ⚠️ **技能路径拿不到**：B2-X1 已记录"技能分支的 `events` 收集器始终为空"
-        （技能输出直接走 SSE，不进 events）⇒ 返回 `{}` ⇒ 该轮历史**不显示占用率**。
-        这是**降级而非报错**：宁可少显示，也不伪造数据。
-        """
-        for e in events or []:
-            if getattr(e, "type", None) == "done":
-                return _ctx_usage_from_done(getattr(e, "data", None))
-        return {}
+    # ★ P-03（2026-10-09）：原 `_ctx_usage_from_events(events)` **已删除**。
+    #   原因：它是"技能路径落库占用率"的唯一调用方，而技能分支的 `events` 收集器**恒为空**
+    #   （技能输出直接走 SSE、不进 events）⇒ 它对该路径**永远返回 `{}`**：接上了但没数据，
+    #   当轮 `done` 又不带数 ⇒ 实时与历史**双双缺失**（用户实测：「只使用命令时不计入上下文用量」）。
+    #   现改为直接用 `_UsageRecorder` 捕获的 `_ctx_payload`（与实时 done 同源），
+    #   `_ctx_usage_from_done` 仍是**唯一解析口径**。
+    #   ★ 删除而非保留：避免留下"看似可用、实则恒返回空"的死代码/死接线
+    #   （与本项目对"死配置项"的一贯纪律一致）。
 
     def _build_notice(kind: str, title: str, message: str, suggestion: str) -> dict:
         return {"kind": kind, "title": title, "message": message, "suggestion": suggestion}
@@ -1589,6 +1581,24 @@ async def stream_message(session_id: int, body: ChatRequest, request: Request) -
             notice = _invalid_notice("fallback", _trailing_invalid) if _was_empty else None
             yield sse_event("message", {"text": final_text,
                 "citations": [{"id": c.get("id"), "page": normalize_page(c.get("page")), "doc_id": c.get("doc_id"), "text": c.get("text"), "model_truncated": c.get("model_truncated", False)} for c in citations]})
+            # ★ P-03（2026-10-09）：**技能轮也上报上下文占用**。
+            #   背景：技能在 `skill.run` 里直接调 LLM、不经 AgentLoop ⇒ 原先 done 事件里没有
+            #   `peak_prompt_tokens`/`max_tokens_budget`，`meta.ctx` 又依赖恒为空的 `events`
+            #   ⇒ 前端「上下文用量」面板**对命令轮完全不计数**（用户实测反馈）。
+            #   数据其实早已捕获：`_UsageRecorder`（上方 `recorder`）在包装 LLM 时记录了
+            #   `peak_prompt_tokens`/`first_prompt_tokens`，只是**没往外发**。
+            #   ⚠️ 双尺子警告：技能轮的 prompt **不含历史/全量文档**（只发候选+上下文），
+            #      所以这里的数值天然**小于**普通问答轮 —— 这是**真实值**，不要折算、也不要跨轮比较。
+            #   ⚠️ 只有 `peak > 0` 才注入：若写成 `peak_prompt_tokens: 0`，前端 `??` 会短路
+            #      掉历史回填（`ctx.peak`），把"无数据"显示成 0%。
+            _ctx_payload: dict = {}
+            if recorder is not None and recorder.peak_prompt_tokens > 0:
+                _ctx_payload = {
+                    "peak_prompt_tokens": recorder.peak_prompt_tokens,
+                    # 与普通路径同源：AgentLoop 用 config.max_tokens_budget；技能路径从
+                    # runtime_settings 取（同口径，见 routes_metrics.py:176 的说明）。
+                    "max_tokens_budget": runtime_settings.get_state().get("max_tokens_budget"),
+                }
             # 2026-09-07 修复：持久化用 user_content（含多模态图片块）而非 body.content 纯文本，
             # 否则走技能路径（/总结 /对比 等）时用户随消息发送的图片不会写入历史，
             # 刷新后图片上下文丢失（与"多模态历史不丢失"目标矛盾，Agent/直答路径均用 user_content）。
@@ -1605,8 +1615,11 @@ async def stream_message(session_id: int, body: ChatRequest, request: Request) -
                                   citations=citations,
                                   # ★ P1-a2：把占用率一并落进 meta，供**刷新后回填**
                                   # （否则"当轮看得到、刷新即消失"，与 B2-X1 同类缺陷）
+                                  # ★ P-03（2026-10-09）：技能轮改用 `_ctx_payload`（recorder 捕获）——
+                                  #   原先传 `_ctx_usage_from_events(events)`，而技能分支的 events
+                                  #   收集器**恒为空** ⇒ 技能轮的历史回填永远是 `{}`。
                                   meta=_persist_meta(notice, model_risk=model_risk,
-                                                     ctx=_ctx_usage_from_events(events)))
+                                                     ctx=_ctx_usage_from_done(_ctx_payload)))
             if final_text and memory_enabled:
                 await chat_svc.reflect(
                     session_id, agent.llm,
@@ -1624,6 +1637,8 @@ async def stream_message(session_id: int, body: ChatRequest, request: Request) -
                                      "cost": usage["cost"], "latency_ms": 0,
                                      # O-12：技能路径同口径上报服务端首字延迟
                                      "ttft_ms": _ttft_ms(),
+                                     # ★ P-03：技能轮的上下文占用（空 dict = 无数据，前端保持不确定态）
+                                     **_ctx_payload,
                                      **({"notice": notice} if notice else {}),
                                      **_done_extra})
             return

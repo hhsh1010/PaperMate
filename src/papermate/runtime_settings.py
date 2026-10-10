@@ -427,23 +427,14 @@ def _apply_env(state: dict) -> None:
 
 
 def _enrich_deps() -> dict:
-    """探测图片增强（Level 2）依赖是否可用，供前端展示「开启后实际能增强哪些能力」。"""
-    deps = {"ocr": False, "table": False, "vlm": True}  # VLM 走已有 LLM 通道，始终可用
-    try:
-        from paddleocr import PaddleOCR  # noqa: F401
+    """探测图片增强（Level 2）依赖是否可用，供前端展示「开启后实际能增强哪些能力」。
 
-        deps["ocr"] = True
-    except Exception:  # noqa: BLE001
-        pass
-    try:
-        import torch  # noqa: F401
-        from PIL import Image  # noqa: F401
-        from transformers import AutoImageProcessor  # noqa: F401
+    ★ 2026-10-09：实现**收敛到 `services.figure_deps.probe()`（唯一口径）**——
+    这里只做委托，避免"探测"与"安装通道"各留一份（同源纪律：不造第二把尺子）。
+    """
+    from .services.figure_deps import probe as _probe  # 惰性导入：避免模块级循环
 
-        deps["table"] = True
-    except Exception:  # noqa: BLE001
-        pass
-    return deps
+    return _probe()
 
 
 def public_view(state: dict | None = None) -> dict:
