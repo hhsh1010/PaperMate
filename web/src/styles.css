@@ -6830,3 +6830,74 @@ input, select, textarea { font-family: inherit; }
 }
 .rw-ai-foot-ops { display: flex; gap: var(--sp-2); margin-left: auto; }
 .rw-ai-adopt { padding: 6px 14px; font-size: var(--fs-sm); }
+
+/* ==========================================================================
+   UI 打磨（2026-10-10，用户四项需求）
+   ① 弹窗统一圆角过渡 + 悬浮特效  ② 长命名不挤按钮  ③ 工作间会话区收纳  ④ 文档表自适应
+   ========================================================================== */
+
+/* ---- ① 弹窗：按钮圆角统一 + 悬浮抬升/阴影；关闭钮旋入过渡 ---- */
+.modal-btn {
+  border-radius: var(--radius-md);
+  transition: background 0.15s ease, transform 0.15s var(--ease-pop), box-shadow 0.15s ease;
+}
+.modal-btn:hover { transform: translateY(-1px); box-shadow: var(--shadow-e2); }
+.modal-btn:active { transform: scale(0.98); box-shadow: none; }
+.modal-close { transition: background 0.12s ease, color 0.12s ease, transform 0.15s var(--ease-pop); }
+.modal-close:hover { transform: rotate(90deg); }
+
+/* ---- ② 会话/文档标题过长：省略号收缩，右侧按钮不再被挤 ---- */
+.chat-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 1 auto;
+}
+.chat-header > * { flex: 0 0 auto; }
+.chat-header > .chat-title { flex: 0 1 auto; }
+.panel-head .panel-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.panel-head > * { flex: 0 0 auto; }
+.panel-head > .panel-title { flex: 0 1 auto; }
+
+/* ---- ④ 文档表自适应：名称列保底可辨认（省略号 + tooltip 已有），窄窗横向滚动 ---- */
+@media (min-width: 769px) {
+  .doc-table-head,
+  .doc-table-row {
+    grid-template-columns: 44px minmax(160px, 1fr) minmax(110px, 130px) minmax(84px, 100px) minmax(200px, 240px);
+  }
+}
+.doc-table-panel { overflow-x: auto; }
+
+/* ---- ③ 工作间右侧会话区收纳/展开 ---- */
+.workbench-chat {
+  position: relative;
+  transition: flex-basis 0.25s var(--ease-pop);
+}
+.workbench-chat.collapsed { flex: 0 0 44px; }
+.workbench-chat.collapsed > *:not(.ws-chat-handle) { visibility: hidden; }
+.ws-chat-handle {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 6;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.15s var(--ease-pop);
+}
+.ws-chat-handle:hover {
+  background: var(--surface-2);
+  color: var(--text);
+  transform: scale(1.08);
+}

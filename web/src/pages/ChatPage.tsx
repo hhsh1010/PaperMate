@@ -154,6 +154,25 @@ export function ChatPage({
   const [exportNote, setExportNote] = useState<string | null>(null);
   /** F8：记忆管理面板开关（复用设置页 MemoryPanel 组件，零改造） */
   const [memOpen, setMemOpen] = useState(false);
+  /** ★ 2026-10-10（用户需求）：工作间右侧会话区**收纳/展开** —— 持久化到 localStorage，
+   *  收起后工作台获得全部宽度，侧栏缩为细条（点把手再展开）。 */
+  const [wsChatCollapsed, setWsChatCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem("pm-ws-chat-collapsed") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const toggleWsChat = useCallback(() => {
+    setWsChatCollapsed((v) => {
+      try {
+        localStorage.setItem("pm-ws-chat-collapsed", v ? "0" : "1");
+      } catch {
+        /* 忽略持久化失败 */
+      }
+      return !v;
+    });
+  }, []);
   /** F6：本轮自动识别的学科（auto 模式下从 done 事件回传），用于顶栏反馈 chip */
   const [detected, setDetected] = useState<{ key: string; label: string } | null>(null);
   /** F5：本会话关联的文献集名称（顶栏徽标展示用），随 collectionId 变化按需拉取 */
@@ -1078,7 +1097,27 @@ export function ChatPage({
             <Suspense fallback={<PanelLoading />}>
               <RevisionWorkbench docId={workbenchDraftId} docName={workbenchDraftName} />
             </Suspense>
-            <div className="workbench-chat">{chatArea}</div>
+            <div className={"workbench-chat" + (wsChatCollapsed ? " collapsed" : "")}>
+              {/* ★ 收纳把手：常驻面板右上角；收起后面板缩为细条，点把手再展开 */}
+              <button
+                type="button"
+                className="ws-chat-handle"
+                onClick={toggleWsChat}
+                title={wsChatCollapsed ? "展开会话区" : "收起会话区"}
+                aria-label={wsChatCollapsed ? "展开会话区" : "收起会话区"}
+              >
+                <span
+                  aria-hidden="true"
+                  style={{
+                    display: "inline-flex",
+                    transform: wsChatCollapsed ? "none" : "rotate(180deg)",
+                  }}
+                >
+                  <Icons.chevronRight size={14} />
+                </span>
+              </button>
+              {chatArea}
+            </div>
           </div>
         ) : isWorkbench ? (
           <div className="rw-guide">
