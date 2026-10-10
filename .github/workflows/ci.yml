@@ -1,0 +1,69 @@
+name: CI
+
+# ★ 2026-10-10 建立：此前四道门禁（ruff / pytest / tsc+vitest / build）全靠手动跑，
+# 仓库里躺着 1800+ 用例却没有自动化 —— 本文件把它们接到 push/PR 上。
+#
+# 设计取舍（都为了一次跑绿、少烧额度）：
+#  1) 后端只装**基础依赖**（uv sync --frozen）：torch/faiss/FlagEmbedding 在 [rag] extra，
+#     不进 CI（否则单次 ≥4GB 下载）。缺 [rag] 的用例由 pytest.importorskip 优雅跳过。
+#  2) 后端跑 `-m "not slow"`（实测 1685/1833 用例）：slow 多为数值密集/模型加载用例，
+#     留在本地发布门禁；CI 只守「快速回归」。
+#  3) xdist 用 `-n 2`：本仓库实测单 worker 峰值 ~960MB，GitHub 托管 runner 7GB 内存下 2 个安全。
+#  4) 同一分支新推送取消旧任务（concurrency），省额度。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch: # 手动触发：首次接入时先手动跑一次验证再开自动
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: ruff check
+        run: uvx ruff check src tests
+
+  frontend:
+    name: Frontend (tsc + vitest + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install (npm ci)
+        run: npm ci
+      - name: Type check
+        run: npx tsc --noEmit
+      - name: Unit tests
+        run: npx vitest run --no-file-parallelism
+      - name: Build
+        run: npm run build
+
+  backend:
+    name: Backend (pytest, not slow)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install base deps (frozen lock)
+        run: uv sync --frozen
+      - name: pytest (not slow)
+        # 用仓库自带启动器（单实例锁 + 参数透传），与本地门禁完全同一条命令
+        run: uv run --frozen python scripts/run_tests.py -q -n 2 -m "not slow"

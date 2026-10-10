@@ -21,8 +21,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-import numpy as np
 import pytest
+
+# ★ 2026-10-10：numpy 属 [rag] 侧依赖，不在基础依赖集里 —— 顶层直接 import 会让
+# **整个文件在 CI（轻依赖环境）收集期报错**。改成仓库既有惯例 importorskip：
+# 缺 numpy 时本文件整体 skip（而非 collection error），CI 才能保持绿。
+np = pytest.importorskip("numpy")
 
 _EVAL_DIR = Path(__file__).resolve().parent.parent / "eval"
 if str(_EVAL_DIR) not in sys.path:

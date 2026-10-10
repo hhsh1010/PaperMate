@@ -5,14 +5,73 @@
 ![Project Type](https://img.shields.io/badge/type-Agent%20Project-blue)
 ![Tech](https://img.shields.io/badge/Python-3.11%2B-green)
 ![Status](https://img.shields.io/badge/status-Design%20Ready-yellow)
+![CI](https://github.com/hhsh1010/papermate/actions/workflows/ci.yml/badge.svg)
+![License](https://img.shields.io/badge/license-MIT-blue)
 
 ---
 
 ## 项目是什么
 
-**一句话**：本项目不依赖 LangChain/AutoGen 等高层 Agent 框架，从零实现一个可扩展的 Agent 内核（LLM 抽象、ReAct + Function Calling 循环、工具系统、双层记忆、规划反思、混合检索 RAG），并在其上构建一个面向科研场景的**学术论文研读助手**——支持论文问答（带引用溯源）、一键总结、相关工作挖掘。
+**一句话**：本项目不依赖 LangChain/AutoGen 等高层 Agent 框架，从零实现一个可扩展的 Agent 内核（LLM 抽象、ReAct + Function Calling 循环、工具系统、双层记忆、规划反思、混合检索 RAG），并在其上构建一个面向科研场景的**学术论文研读助手**——支持论文问答（带引用溯源）、一键总结、相关工作挖掘、AI 改稿（Word 修订痕迹直写）。
 
 **项目定位**：计算机技术硕士毕业前的"旗舰简历项目"，8 周核心 + 2 周可选增强。
+
+## 架构总览
+
+```mermaid
+flowchart TB
+    subgraph Shell["桌面壳 · Tauri 2 + WebView2（NSIS 安装包 25.38 MB）"]
+        UI["React 18 + TypeScript 前端<br/>研读问答 / 改稿工作台 / 设置与评测"]
+    end
+
+    subgraph App["应用层 · PaperMate"]
+        API["FastAPI + Starlette SSE<br/>流式对话 / 文档 / 改稿 / 评测 / 设置"]
+        DOC["文档服务<br/>docx·pdf 解析 / 分块 / 图片抽取 / 可选 OCR"]
+        EDIT["改稿服务<br/>track-changes 直写 docx（w:ins/w:del）+ 备份撤销"]
+    end
+
+    subgraph Core["Agent 内核 · LightCore（自研，不用 LangChain）"]
+        LOOP["Agent 循环<br/>ReAct ⇄ Function Calling 双协议 / 迭代上限 / 中断恢复 / ¥1 成本熔断"]
+        TOOLS["工具与技能<br/>JSON Schema 注册表 + 权限白名单 + 沙箱执行 / 10 项技能"]
+        MEM["双层记忆<br/>短期滚动窗口 + 摘要压缩｜长期向量记忆 + 反思写入"]
+        RAG["RAG 管线<br/>语义分块 → 混合检索（BGE-M3 向量 + BM25 + 稀疏）→ Cross-Encoder 重排 → 引用溯源"]
+    end
+
+    subgraph Data["本地优先存储（单用户 / 无登录 / 数据不出本机）"]
+        DB[("SQLite + SQLAlchemy<br/>会话·文档·记忆·用量")]
+        IDX[("FAISS 索引<br/>chunks / memories 双索引")]
+        FS[("文件系统<br/>上传件 · 模型权重 · 备份")]
+    end
+
+    LLM["LLM 多厂商（OpenAI 兼容）<br/>DeepSeek · Qwen · OpenAI · 默认 DeepSeek-V4-Flash-Vision（多模态）"]
+
+    UI -->|HTTP / SSE| API
+    API --> LOOP
+    API --> DOC
+    API --> EDIT
+    LOOP --> TOOLS
+    LOOP --> MEM
+    TOOLS --> RAG
+    RAG --> IDX
+    MEM --> IDX
+    DOC --> FS
+    LOOP -->|HTTP| LLM
+    API --> DB
+
+    classDef ui fill:#e3f2fd,stroke:#1976d2,color:#0d47a1
+    classDef app fill:#e8f5e9,stroke:#388e3c,color:#1b5e20
+    classDef core fill:#fff3e0,stroke:#f57c00,color:#e65100
+    classDef data fill:#f3e5f5,stroke:#7b1fa2,color:#4a148c
+    class UI ui
+    class API,DOC,EDIT app
+    class LOOP,TOOLS,MEM,RAG core
+    class DB,IDX,FS data
+```
+
+## 演示
+
+> 📌 待补：`docs/assets/` 下放 3 张截图（研读问答带引用 / 改稿工作台的修订对比 / 设置页功能模块）与一段 30s 录屏 GIF。
+> 在线 Demo 部署步骤见 [`deploy/DEMO_DEPLOY_RUNBOOK.md`](deploy/DEMO_DEPLOY_RUNBOOK.md)。
 
 ## 核心亮点（6 条）
 
@@ -103,11 +162,17 @@ GPU 加速由 `PAPERMATE_DEVICE=cuda` 触发；未设置时按 `cuda → cpu` �
 
 ### 门禁
 
+**本地（发布前全量）**：
+
 ```bash
 .venv/Scripts/python.exe -m ruff check src tests     # 静态检查
 .venv/Scripts/python.exe scripts/run_tests.py        # 后端全量（带单实例锁）
 cd web && npm run typecheck && npm test && npm run build
 ```
+
+**CI（push / PR 自动跑）**：见 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) —— 三个并行 job：
+`ruff check` · `tsc + vitest + build` · `pytest -m "not slow"`（后端只装基础依赖，torch/faiss 等 [rag] 重量级依赖不进 CI，
+缺依赖的用例由 `pytest.importorskip` 优雅跳过；`slow` 用例留在本地发布门禁）。
 
 ## 文档地图（全部文档保存在本仓库）
 
