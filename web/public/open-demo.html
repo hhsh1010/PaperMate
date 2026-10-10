@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PaperMate Demo · 在新窗口打开</title>
+    <!--
+      中转页（README → 本页 → 新窗口打开 demo）。
+
+      为什么需要它：GitHub 会清洗 README 里的内联 JS（onclick 被剥掉），
+      所以 README 的链接**无法**直接强制"新窗口"—— target="_blank" 只能开新标签页。
+      本页跑在 GitHub Pages 上（不经清洗），因此可以用 window.open(..., 'width=..,height=..')
+      真正弹出独立窗口；但**必须由一次点击触发**，否则会被浏览器的弹窗拦截器挡掉。
+    -->
+    <style>
+      :root { color-scheme: light dark; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; min-height: 100vh; display: grid; place-items: center;
+        font: 15px/1.7 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+        background: #f5f6f8; color: #1f2328; padding: 24px;
+      }
+      @media (prefers-color-scheme: dark) {
+        body { background: #14161a; color: #e6e8eb; }
+        .card { background: #1c1f24 !important; border-color: #2c3138 !important; }
+        .muted { color: #9aa4b2 !important; }
+      }
+      .card {
+        width: min(520px, 100%); background: #fff; border: 1px solid #e3e6ea;
+        border-radius: 16px; padding: 28px 26px; box-shadow: 0 10px 30px rgba(16, 24, 40, .08);
+        text-align: center;
+      }
+      h1 { margin: 0 0 6px; font-size: 20px; letter-spacing: -.01em; }
+      p { margin: 0 0 14px; }
+      .muted { color: #6b7280; font-size: 13px; }
+      button {
+        appearance: none; border: 1px solid transparent; border-radius: 10px;
+        background: #2f6fed; color: #fff; font: inherit; font-weight: 600;
+        padding: 11px 20px; cursor: pointer; transition: transform .15s, box-shadow .15s, background .15s;
+      }
+      button:hover { background: #255ddb; transform: translateY(-1px); box-shadow: 0 6px 16px rgba(47, 111, 237, .3); }
+      button:active { transform: none; box-shadow: none; }
+      .ok { color: #15803d; font-weight: 600; }
+      .warn { color: #b45309; font-weight: 600; }
+      a { color: #2f6fed; }
+      [hidden] { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <h1>PaperMate · 论文智友</h1>
+      <p class="muted">零密钥静态 demo：打开就是真实前端界面，数据为内置样例，不连任何后端。</p>
+
+      <button id="go" type="button">在新窗口打开 demo</button>
+
+      <p id="tip" class="ok" hidden>已在新窗口打开 demo —— 本页可以关闭了。</p>
+      <p id="warn" class="warn" hidden>⚠️ 弹窗似乎被浏览器拦截了：请允许本站弹窗后重试，或用下面的链接。</p>
+
+      <p class="muted" style="margin-top: 18px">
+        打不开？改用
+        <a href="./" target="_blank" rel="noopener">新标签页打开</a>
+        ・
+        <a href="./" rel="noopener">本页打开</a>
+      </p>
+    </main>
+
+    <script>
+      // 相对路径 ⇒ 解析到 Pages 上的应用根（/PaperMate/），故本地预览与线上都可用
+      var DEMO_URL = "./";
+      var FEATURES = "width=1280,height=900,noopener";
+
+      document.getElementById("go").addEventListener("click", function () {
+        // 复用同名窗口：再点一次不会开出第二个
+        var win = window.open(DEMO_URL, "papermate_demo", FEATURES);
+        var tip = document.getElementById("tip");
+        var warn = document.getElementById("warn");
+        if (!win) {
+          warn.hidden = false;
+          return;
+        }
+        tip.hidden = false;
+        warn.hidden = true;
+        document.getElementById("go").hidden = true;
+        // 本页若能自关（由脚本打开时才允许）就自动关；否则留一句"本页可以关闭了"
+        try { window.close(); } catch (e) { /* 浏览器不允许脚本关闭普通标签页，忽略 */ }
+      });
+    </script>
+  </body>
+</html>

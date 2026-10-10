@@ -16,6 +16,7 @@ on:
       - "web/src/demo/**"
       - "web/src/main.tsx"
       - "web/src/App.tsx"
+      - "web/public/**"
       - "web/.env.demo"
       - "web/package.json"
       - "web/scripts/build.mjs"
