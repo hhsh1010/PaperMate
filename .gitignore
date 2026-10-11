@@ -140,3 +140,6 @@ coverage/
 
 # Demo 导出产物（scripts/demo_smoke.py 与 .github/workflows/demo.yml 用；CI 作为 artifact 上传）
 demo-artifacts/
+
+# 消融批跑器的单实例锁（scripts/run_ablation.py；0~1 字节常驻小文件）
+.ablation.lock

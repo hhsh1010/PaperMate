@@ -112,6 +112,30 @@ def main(argv: list[str] | None = None) -> int:
             lat = m.get("latency_ms")
             print(f"| {_label(rep)} | " + " | ".join(cells) + f" | {'—' if lat is None else f'{lat:.1f}'} |")
 
+        # ★ 相对基线的 Δ 表 —— 这才是"成本-收益权衡表"的本体：
+        #   绝对指标只能说明"现在多好"，**差值**才能回答"这个组件值不值它的代价"。
+        if len(reps) > 1:
+            base = _metrics_of(reps[0])
+            print(f"\n## 相对基线（第一行：{_label(reps[0])}）的边际收益\n")
+            cols = ("map", "mrr@10", "ndcg@5", "recall@5")
+            print("| 配置 | " + " | ".join(f"Δ{c}" for c in cols) + " | Δlatency_ms |")
+            print("|---" * (len(cols) + 2) + "|")
+            for rep in reps[1:]:
+                m = _metrics_of(rep)
+                cells = []
+                for c in cols:
+                    b, v = base.get(c), m.get(c)
+                    if not isinstance(b, (int, float)) or not isinstance(v, (int, float)):
+                        cells.append("—")
+                    else:
+                        d = v - b
+                        cells.append(f"{d:+.4f}" + (" ✅" if d > 0.0005 else (" ❌" if d < -0.0005 else " ＝")))
+                bl, vl = base.get("latency_ms"), m.get("latency_ms")
+                lat_d = "—" if not (isinstance(bl, (int, float)) and isinstance(vl, (int, float))) else f"{vl - bl:+.1f}"
+                print(f"| {_label(rep)} | " + " | ".join(cells) + f" | {lat_d} |")
+            print("\n> 读法：`✅` 优于基线、`❌` 劣于基线、`＝` 无实质差异（阈值 ±0.0005）。")
+            print("> ⚠️ 延迟的 run 间噪声约 ±10%（实测），**跨 run 比较延迟要看趋势而非单点**。")
+
     for rep in reps:
         print(f"\n### 按用例类型：{_label(rep)}")
         by_kind = rep.get("metrics_by_kind") or {}
