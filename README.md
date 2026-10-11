@@ -192,6 +192,15 @@ cd web && npm run typecheck && npm test && npm run build
 `ruff check` · `tsc + vitest + build` · `pytest -m "not slow"`（后端只装基础依赖，torch/faiss 等 [rag] 重量级依赖不进 CI，
 缺依赖的用例由 `pytest.importorskip` 优雅跳过；`slow` 用例留在本地发布门禁）。
 
+| Job | 命令 | 抓什么 | 本地实测 |
+|---|---|---|---|
+| **Lint** | `ruff check src tests` | 未用变量、可疑写法、格式不一致 | 1.4 秒 |
+| **Frontend** | `tsc --noEmit` → `vitest` → `vite build` | 类型错误、组件逻辑回归、构建失败 | 310 用例 / 15.6 秒 |
+| **Backend** | `pytest -m "not slow"`（1600+ 用例）**+ 用例数闸门** | 接口契约、检索/改稿逻辑回归、测试顺序依赖 | 48 秒（runner） |
+
+> **为什么额外加一道「用例数闸门」**：收集到的用例数低于 1500 就直接判红 —— 因为「一个用例都没跑」与
+> 「全部通过」的退出码都是 0，这道闸门专门堵这种**假绿**。
+
 ## 文档地图（全部文档保存在本仓库）
 
 ### 📖 技术书（共 12 章）
