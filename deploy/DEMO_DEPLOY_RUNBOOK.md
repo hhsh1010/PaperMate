@@ -22,27 +22,50 @@
 
 ### A1. 本机起服务（两种方式，选一）
 
+> ⚠️ **启动命令以 `python -m papermate.api` 为准**（2026-10-10 更正：早先本文档写的
+> `papermate.cli serve ...` 是错的 —— `papermate.cli` 是**命令行对话 REPL**，没有 `serve` 子命令）。
+
 ```powershell
-# 方式 1（绿色，最省事）：直接跑构建产物（数据根指向已有数据）
+# 方式 1（绿色，最省事）：直接跑构建产物（数据根沿用你已配置的）
 cd D:\harness-space\agent-project
 & "desktop\src-tauri\target\release\papermate-desktop.exe"
 
-# 方式 2（后端单独起，便于看日志）
+# 方式 2（后端单独起，便于看日志）—— ★ 推荐给 Demo 用：**独立数据目录**
 cd D:\harness-space\agent-project
-uv run python -m papermate.cli serve --data-dir D:\paperdate\data --port 8000
-# 健康检查（应返回 JSON）
-curl.exe http://127.0.0.1:8000/healthz
+$env:PAPERMATE_DATA_DIR = "D:\papermate-demo\data"      # 与真实数据隔离（见下方安全说明）
+.venv\Scripts\python.exe -m papermate.api               # 默认绑 127.0.0.1:8000
+
+# 健康检查（★ 正确路径是 /api/v1/healthz —— 2026-10-10 实测更正，早先写的 /healthz 是 404）
+curl.exe http://127.0.0.1:8000/api/v1/healthz
+# 期望：{"status":"ok","db_ok":true,"network_exposed":false,"default_model":...}
 ```
+
+> 🔒 **为什么 Demo 要用独立数据目录**：本项目**无鉴权**，且 `PUT /settings` 可写模型密钥。
+> 独立目录把公网可达的范围限制在"演示数据"里 —— 不会碰到你真实的论文与 provider_settings.json。
+> （另有 E3 硬闸：绑非 127.0.0.1 会**直接拒绝启动**，需显式 `PAPERMATE_ACCEPT_PUBLIC_EXPOSURE=1`；
+> 走 cloudflared 隧道时服务仍绑 127.0.0.1，**不触发**，无需放行。）
 
 ### A2. 开通临时公网隧道
 
-```powershell
-# 安装（一次性）
-winget install --id Cloudflare.cloudflared
+**首选：cloudflared（winget 安装，1 分钟）**
 
-# 起隧道：把本机 8000 暴露为 https://xxxx.trycloudflare.com
+```powershell
+# 安装（装完请**新开一个终端**，让 PATH 刷新）
+winget install --id Cloudflare.cloudflared
 cloudflared tunnel --url http://127.0.0.1:8000
-# 终端会打印一个 https://<随机名>.trycloudflare.com —— 这就是 Demo 地址
+# 终端会打印 https://<随机名>.trycloudflare.com —— 这就是 Demo 地址
+```
+
+> ⚠️ **别用「下载 exe + curl -C - 断点续传」**（2026-10-10 实测踩坑）：
+> `releases/latest/download/...` 会经历多次重定向，`-C -` 的 Range 请求与重定向链**互相打架** ——
+> 每次请求返回的 content-length 都不一样（实测 55MB → 29.6MB → 26.3MB），最终把文件拼成 35.5MB 的
+> **损坏体**（表现为 `Exec format error`）。要么 winget，要么**一次性完整下载**（不要续传）。
+
+**备用：ssh 隧道（零安装，Windows 自带 OpenSSH；国内偶尔不稳）**
+
+```powershell
+# 得到 https://xxxx.lhr.life 形式的地址
+ssh -o StrictHostKeyChecking=no -R 80:localhost:8000 nokey@localhost.run
 ```
 
 ### A3. 验收清单
