@@ -18,6 +18,8 @@ import logging
 from collections.abc import Sequence
 from typing import Protocol, runtime_checkable
 
+from ..runtime.resource_lock import hold_model_load
+
 logger = logging.getLogger(__name__)
 
 
@@ -114,18 +116,21 @@ class CrossEncoderReranker:
             logger.warning("reranker fp16 只在 CUDA 上启用（当前 device=%s）→ 回落 fp32", device)
         self.fp16 = want_fp16
         local = self._resolve_local(model_name)
-        if local:
-            self._model = CrossEncoder(local, device=device, local_files_only=True,
-                                       max_length=self.max_length)
-        else:
-            # 无本地快照：兜底指向国内镜像后再走常规下载（避免直连被墙域名干等）
-            try:
-                from .hf_local import ensure_hf_mirror
+        # G1：与 embedder 同一把**跨进程锁** —— 两个进程同时构造重模型会互抢显存死锁。
+        # （构造由调用方经 `asyncio.to_thread` 执行，故此处阻塞等待安全。）
+        with hold_model_load("重排模型 bge-reranker"):
+            if local:
+                self._model = CrossEncoder(local, device=device, local_files_only=True,
+                                           max_length=self.max_length)
+            else:
+                # 无本地快照：兜底指向国内镜像后再走常规下载（避免直连被墙域名干等）
+                try:
+                    from .hf_local import ensure_hf_mirror
 
-                ensure_hf_mirror()
-            except Exception:  # noqa: BLE001  镜像兜底失败不影响主流程
-                pass
-            self._model = CrossEncoder(model_name, device=device, max_length=self.max_length)
+                    ensure_hf_mirror()
+                except Exception:  # noqa: BLE001  镜像兜底失败不影响主流程
+                    pass
+                self._model = CrossEncoder(model_name, device=device, max_length=self.max_length)
         if self.fp16:
             self._model.model.half()
 

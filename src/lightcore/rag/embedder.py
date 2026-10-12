@@ -22,6 +22,8 @@ from collections.abc import Sequence
 
 import numpy as np
 
+from ..runtime.resource_lock import hold_model_load
+
 logger = logging.getLogger(__name__)
 
 #: 首次导入失败后的重试退避（秒）。长度 = 额外尝试次数；总尝试次数 = 1 + len(该元组)。
@@ -250,9 +252,14 @@ class BgeM3Embedder(Embedder):
 
             device = auto_device()
         self.device = device
-        self._model = BGEM3FlagModel(
-            model_name, use_fp16=(device == "cuda"), devices=device
-        )
+        # G1：重模型构造走**跨进程互斥**。实测本步 12.7~18.3s（占冷启动 71.8%），
+        # 两个进程同时构造会互抢 8GB 显存 ⇒ 双方死锁（CPU 0%、GPU 占满、零产出）。
+        # ⚠️ 本函数由调用方经 `asyncio.to_thread` 执行（见 `document_service`：'必须走 to_thread'），
+        #    故这里的**阻塞等待是安全的**；若将来有调用方在事件循环里直接调用它，会冻结后端。
+        with hold_model_load("嵌入模型 bge-m3"):
+            self._model = BGEM3FlagModel(
+                model_name, use_fp16=(device == "cuda"), devices=device
+            )
         logger.info("BgeM3Embedder 已加载（model=%s, device=%s, fp16=%s）",
                     model_name, device, device == "cuda")
         self.dim = getattr(self._model, "dim", 1024)
