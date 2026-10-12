@@ -63,6 +63,10 @@ packages = ["src/lightcore", "src/papermate"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# 归档探针（scripts/archive/）是**历史快照，冻结不维护**：里面本就有被后续改动留下的死代码
+# （如 `ev = None` 之后 `for _ in (): pass`）。逐条修补既无价值，又会破坏"快照=当时原样"的语义
+# ⇒ 不纳入 lint。⚠️ 注意：CI 的 lint 门禁只查 `src` 与 `tests`，本项不影响门禁结论。
+exclude = ["scripts/archive"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

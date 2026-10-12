@@ -20,8 +20,9 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
-from lightcore.llm.base import ChatMessage, Role
-from lightcore.llm.router import PRESET_ENDPOINTS, OAICompatibleLLM
+# noqa: E402 —— 这两行**必须**在 `sys.path.insert` 之后（否则 `lightcore` 找不到）
+from lightcore.llm.base import ChatMessage, Role  # noqa: E402
+from lightcore.llm.router import PRESET_ENDPOINTS, OAICompatibleLLM  # noqa: E402
 
 
 def _load_env_file(path: str) -> None:
