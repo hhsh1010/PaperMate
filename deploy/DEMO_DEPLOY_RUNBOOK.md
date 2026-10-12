@@ -1,6 +1,6 @@
-# 在线 Demo 部署 Runbook（P0-③）
+# 在线 Demo 部署 Runbook
 
-> 目标：拿到一个**可访问的 URL**，让面试官 30 秒内体验（并写进简历）。
+> 目标：拿到一个**可访问的 URL**，让别人 30 秒内体验。
 > 现状核对（2026-10-10）：`deploy/` 里 `Dockerfile`、`docker-compose.yml`、`nginx/`、`deploy.sh`、`rollback.sh`
 > **都已写好，但从未在真实环境跑通过**；本开发机**未安装 Docker**。
 
@@ -10,8 +10,8 @@
 
 | 方案 | 前置 | 耗时 | 成本 | 适合 |
 |---|---|---|---|---|
-| **A. 本机 + cloudflared 临时隧道**（推荐先做） | 本机跑得起来（已有 `uv`） | ~20 分钟 | **0** | 面试前演示、快速验证可行性 |
-| **B. 云服务器 + Docker Compose**（推荐正式版） | 一台 Linux 云主机 + 域名(可选) | 半天 | ~¥30~60/月 | 简历长期挂 URL |
+| **A. 本机 + cloudflared 临时隧道**（推荐先做） | 本机跑得起来（已有 `uv`） | ~20 分钟 | **0** | 临时演示、快速验证可行性 |
+| **B. 云服务器 + Docker Compose**（推荐正式版） | 一台 Linux 云主机 + 域名(可选) | 半天 | ~¥30~60/月 | 长期可访问的演示地址 |
 | **C. 只做录屏 + 截图** | 无 | ~30 分钟 | 0 | 兜底：至少 README 里能看到 |
 
 > **建议顺序：A 先跑通证明可行 → 再上 B**。A 得到的 URL 是临时的（关隧道即失效），但足以验证 nginx/前端/后端链路。
@@ -84,7 +84,7 @@ ssh -o StrictHostKeyChecking=no -R 80:localhost:8000 nokey@localhost.run
    auth_basic "PaperMate Demo";
    auth_basic_user_file /etc/nginx/.htpasswd;   # htpasswd -c 生成
    ```
-   面试时把账号密码随 URL 一起给（简历上写"Demo 需口令：见附言"）。
+   把账号密码**单独**给使用者（不要在公开渠道贴出口令）。
 3. 另外建议关闭高成本功能（如把默认模型切到便宜的、把技能总开关关掉）。
 
 ---
@@ -153,5 +153,5 @@ bash deploy/update-server/rollback.sh   # 回滚上一版
 ## 完成后要改的三处（我帮你改，说一声即可）
 
 1. README「演示」段：填 Demo URL / 截图；
-2. 简历的「项目经历」：加一行 `在线体验：https://…`；
+2. 在项目介绍里加一行 `在线体验：https://…`；
 3. `deploy/README.md`：把本 runbook 的结论回写（避免以后自己忘）。
