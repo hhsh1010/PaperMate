@@ -170,6 +170,10 @@ sequenceDiagram
 | 前端单测 | **310 条**（31 文件）| tsc + vitest + 构建 |
 | CI 门禁 | **3 个 job，单次约 1 分钟** | lint / 前端 / 后端 **+ 用例数下限闸门**（防"零用例通过"的假绿）|
 
+CI 配置见 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)：三个 job 并行执行 `ruff check` ·
+`tsc + vitest + build` · `pytest -m "not slow"`（后端只装基础依赖，torch/faiss 等 `[rag]` 重量级依赖不进 CI，
+缺依赖的用例由 `pytest.importorskip` 优雅跳过；`slow` 用例留在本地发布门禁）。
+
 **评测指标**（同一套用例，`--merge composite` 与线上同源）
 
 | 指标 | 值 | 口径 |
@@ -191,31 +195,12 @@ React 18 + Vite + TypeScript · Tauri 2（桌面端）· pytest + 自研评测�
 **模型**：OpenAI 兼容多厂商（DeepSeek / Qwen / OpenAI），可在设置页或 `.env` 切换；
 首启默认 `fake`（零密钥）。厂商与模型目录见 `src/lightcore/llm/router.py` 的 `PRESET_ENDPOINTS` / `PROVIDER_MODELS`。
 
-## 目录与门禁约定
+## 参与贡献
 
-**什么会进仓库、什么不会**：
+克隆后是「空壳」—— `data/`（数据库 / 上传论文 / 索引 / 日志）与 `.env` 均被 `.gitignore` 排除，
+首次启动会自动创建数据目录；**运行数据与密钥不进仓库**。
 
-| 路径 | 入库 | 说明 |
-|---|:---:|---|
-| `src/` `tests/` `eval/*.py` `web/src/` | ✅ | 源码与测试 |
-| `eval/cases/*.jsonl` | ✅ | gold 评测集 —— ⚠️ **指纹按原始字节计算，不要改行尾** |
-| `data/` | ❌ | 数据库、上传论文、索引、日志、**含明文密钥的 `provider_settings.json`** |
-| `.env` | ❌ | 密钥 |
-| `web/dist/` `web/node_modules/` `.venv/` | ❌ | 构建产物与依赖 |
-| `.workbuddy/` | ❌ | 项目工作记忆（本地私有） |
-
-**发布前门禁**（本地全量）：
-
-```bash
-.venv/Scripts/python.exe -m ruff check src tests     # 静态检查
-.venv/Scripts/python.exe scripts/run_tests.py        # 后端全量（带单实例锁）
-cd web && npm run typecheck && npm test && npm run build
-```
-
-CI（push / PR 自动跑）见 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)：三个 job 并行执行
-`ruff check` · `tsc + vitest + build` · `pytest -m "not slow"`。
-后端只装基础依赖（torch/faiss 等 `[rag]` 重量级依赖不进 CI），缺依赖的用例由 `pytest.importorskip` 优雅跳过；
-`slow` 用例留在本地发布门禁。
+提交前的门禁、评测语料指纹注意事项、提交规范等，见 **[CONTRIBUTING.md](CONTRIBUTING.md)**。
 
 ## 文档与许可
 
