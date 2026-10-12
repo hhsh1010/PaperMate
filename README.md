@@ -44,7 +44,14 @@ flowchart TB
         FS[("文件系统<br/>上传件 · 模型权重 · 备份")]
     end
 
-    LLM["LLM 多厂商（OpenAI 兼容）<br/>DeepSeek · Qwen · OpenAI · 默认 DeepSeek-V4-Flash-Vision（多模态）"]
+    subgraph Qual["评测与质量（与线上同源）"]
+        EVAL["评测管线<br/>739 条样例 · 检索指标（recall/mrr/ndcg/map）<br/>答案忠实性（判官与答案模型异源）<br/>用例集指纹 + 实现指纹 ⇒ 报告过期即报红"]
+        CI["CI 三路门禁<br/>lint · 前端（tsc+单测+构建）· 后端（1600+ 用例）<br/>+ 用例数下限闸门（防"零用例通过"）"]
+    end
+
+    GUARD["运行时资源守卫<br/>重模型加载跨进程互斥<br/>（防多实例抢显存死锁；崩溃自动释放）"]
+
+    LLM["LLM 多厂商（OpenAI 兼容）<br/>DeepSeek · Qwen · OpenAI<br/>首启默认 fake（零密钥即可跑通全链路）；设置页可切换"]
 
     UI -->|HTTP / SSE| API
     API --> LOOP
@@ -58,15 +65,44 @@ flowchart TB
     DOC --> FS
     LOOP -->|HTTP| LLM
     API --> DB
+    RAG -->|同源口径| EVAL
+    EVAL --> CI
+    GUARD -.->|护住模型加载窗口| RAG
 
     classDef ui fill:#e3f2fd,stroke:#1976d2,color:#0d47a1
     classDef app fill:#e8f5e9,stroke:#388e3c,color:#1b5e20
     classDef core fill:#fff3e0,stroke:#f57c00,color:#e65100
     classDef data fill:#f3e5f5,stroke:#7b1fa2,color:#4a148c
+    classDef qual fill:#e1f5fe,stroke:#0277bd,color:#01579b
     class UI ui
     class API,DOC,EDIT app
     class LOOP,TOOLS,MEM,RAG core
     class DB,IDX,FS data
+    class EVAL,CI,GUARD qual
+```
+
+### 一次提问的链路（简化）
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as 用户（React 前端）
+    participant A as FastAPI / SSE
+    participant L as Agent 循环（LightCore）
+    participant T as 工具（检索 / 抽取 / 技能）
+    participant M as 记忆（短期 + 长期）
+
+    U->>A: POST /sessions/{id}/messages/stream
+    A->>L: 组装上下文（历史压缩 + 记忆召回）
+    L->>M: 召回长期记忆（scope 分层，避免跨论文串台）
+    L->>T: ① retrieve（语义分块 → 混合检索 → 重排）
+    T-->>L: 证据块 + 引用元数据（标注"节选：模型所见已截断"）
+    L->>T: ② 需要时继续调用（抽图 / 总结 / 复盘）
+    Note over L,T: 迭代上限 12 · 连续失败上限 3 · 无进展则注入"换策略"注记
+    L-->>A: 逐块 message_delta（SSE）
+    A-->>U: 流式渲染 + 引用卡片
+    L->>A: message（正文 + citations）/ done（用量与成本）
+    Note over A,L: 成本熔断（¥/轮）· 失败轮次也落库（带 invalid/notice）
 ```
 
 ## 演示
@@ -125,8 +161,8 @@ DeepSeek（`deepseek-chat` / `deepseek-reasoner`）、Qwen（`qwen-plus/max/turb
 ## 当前状态
 
 - [x] 需求与架构设计完成（技术书 01–13 全稿 + 可行性论证）
-- [x] 实施完成：M1 内核 → M2 记忆/RAG → M3.1 FastAPI+SSE → M3.2 React 前端 → 阶段 A（P0/P1 治理）→ 阶段 B（S3/S4）→ 阶段 C（S5/S6/S8）→ 阶段 D（S9/S10）；**后端 1685 单测 · 前端 261 单测全绿**（2026-10-05 实测）
-- [ ] 工程收尾：CI 门禁（GitHub Actions）/ 横向模型接入（ERNIE/Claude）；Docker 部署文件已就绪（`deploy/`）
+- [x] 实施完成：M1 内核 → M2 记忆/RAG → M3.1 FastAPI+SSE → M3.2 React 前端 → 阶段 A（P0/P1 治理）→ 阶段 B（S3/S4）→ 阶段 C（S5/S6/S8）→ 阶段 D（S9/S10）；**后端 1879 条用例（CI 每次执行 `not slow` 子集 1612 条）· 前端 310 条单测全绿**（2026-10-12 实测）
+- [x] 工程收尾：**CI 三路门禁（GitHub Actions）** · 检索实现指纹校验 · **零密钥在线 Demo** + 端到端可复现 Demo（Actions → Demo）；横向模型接入（ERNIE/Claude）待补；Docker 部署文件已就绪（`deploy/`）
 
 ## 快速开始（本地运行）
 
