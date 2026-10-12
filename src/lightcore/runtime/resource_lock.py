@@ -94,9 +94,9 @@ def acquire(path: Path | None = None, timeout_s: float | None = None) -> int | N
     budget = wait_seconds() if timeout_s is None else timeout_s
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(str(p), os.O_CREAT | os.O_RDWR)
     except OSError as e:  # 数据目录不可写等 → 明确失败，别静默放行
-        raise ModelBusyError(f"无法创建模型加载锁文件 {p}：{e}") from e
+        raise ModelBusyError(f"无法创建模型加载锁目录 {p.parent}：{e}") from e
+    fd = _open_with_retry(p)
 
     deadline = time.monotonic() + max(budget, 0.0)
     waited = False
@@ -115,6 +115,29 @@ def acquire(path: Path | None = None, timeout_s: float | None = None) -> int | N
             os.close(fd)
             return None
         time.sleep(_POLL_S)
+
+
+#: 打开锁文件的重试预算（秒）
+_OPEN_RETRY_S = 3.0
+
+
+def _open_with_retry(p: Path) -> int:
+    """打开锁文件；对**瞬时**占用做有限重试。
+
+    ★ 为什么需要（真机验收抓出来的）：Windows 上杀软/搜索索引器会扫刚创建的文件，
+    此时 `os.open(O_RDWR)` 会瞬时返回 `EACCES`。原先"一次失败就抛错"会让**正常启动被误杀**；
+    而无限重试又会退化成"卡住"。故：**有限重试 + 明确失败**。
+    """
+    deadline = time.monotonic() + _OPEN_RETRY_S
+    while True:
+        try:
+            return os.open(str(p), os.O_CREAT | os.O_RDWR)
+        except OSError as e:
+            if time.monotonic() >= deadline:
+                raise ModelBusyError(
+                    f"无法打开模型加载锁文件 {p}（重试 {_OPEN_RETRY_S:.0f}s 仍失败）：{e}"
+                ) from e
+            time.sleep(_POLL_S)
 
 
 def _write_owner(fd: int) -> None:
