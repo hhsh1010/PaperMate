@@ -25,9 +25,11 @@ if no_progress_steps >= self.config.max_steps_no_progress:  # ← 6，**永不�
 - **产不出证据键的工具**（答案结构里既无 `results` 也无 `text`+`page`）⇒
   `_is_key_trackable()` 返回 False ⇒ **判不了**，必须保守视为"有进展"。
   否则会把"换用非检索类工具"误报成原地打转（**假阳性**在他处会被当成"卡住"）。
-- ⚠️ 本版**只记录、不动作**：不中止、不换策略。故本文件的核心断言之一是
-  **"即使连续无进展超过阈值，也不得因 NO_PROGRESS 中止"** ——
-  守住"观察期不得引入行为变化"这条契约（质量优先：未证伪误报前不许有中止能力）。
+- ⚠️ **动作 = 换策略（补救），不是中止（放弃）**（2026-10-12 观察期收口）：
+  跨越阈值时**注入一条系统注记**（要求换关键词 / 换工具 / 换参数），**仍然不得中止**。
+  故本文件的两条核心断言是：①跨越阈值**必须**注入注记，且**只注入一次**；
+  ②连续无进展**超过**阈值也**不得**以 `NO_PROGRESS` 中止。
+  取舍理由：中止是放弃、换策略是补救；未证伪误报前不得引入中止能力（质量优先）。
 """
 
 from __future__ import annotations
@@ -54,9 +56,12 @@ class _AlwaysToolLLM:
     def __init__(self) -> None:
         self.model_name = "test-model"
         self.n = 0
+        #: 记录每次调用收到的 messages —— 用于断言「换策略注记」**确实被注入**（而非只写日志）。
+        self.seen: list[list] = []
 
     async def chat(self, messages, *args, **kw):  # noqa: ANN001, ANN002
         self.n += 1
+        self.seen.append(list(messages))
         return LLMResponse(
             message=ChatMessage(role=Role.ASSISTANT, content="", tool_calls=[
                 ToolCall(id=f"c{self.n}", name="probe", arguments={"query": "q"}),
@@ -105,6 +110,14 @@ def _progress_lines(caplog) -> list[str]:
     return [r.getMessage() for r in caplog.records if "[无进展]" in r.getMessage()]
 
 
+def _hint_notes(msgs) -> list:  # noqa: ANN001
+    """本次 LLM 调用收到的 messages 里的「换策略注记」（按内容识别，不依赖位置）。"""
+    return [
+        m for m in msgs
+        if m.role == Role.SYSTEM and "无进展提醒" in (m.content or "")
+    ]
+
+
 # ------------------------------------------------------------------- 断言
 
 
@@ -134,14 +147,15 @@ def test_threshold_crossing_emits_warning_once(caplog) -> None:
     assert len(warns) == 1, f"跨阈值应只报一次，实际 {len(warns)} 次"
 
 
-def test_no_progress_is_log_only_and_never_aborts(caplog) -> None:
-    """★★ 守"观察期不得改行为"：连续无进展**超过**阈值也不得因 NO_PROGRESS 中止。
+def test_no_progress_injects_hint_and_never_aborts(caplog) -> None:
+    """★★ 契约（2026-10-12 收口版）：跨阈值 ⇒ **注入换策略注记**，但**绝不因 NO_PROGRESS 中止**。
 
     终止原因必须是"达到最大迭代"（既有路径），且 `failure_kind` 不得是 `no_progress`
-    —— 一旦这条红了，说明有人在观察期给新判据接上了中止能力（此时必须先证明误报率）。
+    —— 一旦这条红了，说明有人给新判据接上了**中止**能力（那必须先证明误报率）。
     """
     caplog.set_level(logging.INFO, logger=LOGGER_NAME)
-    loop = AgentLoop(_AlwaysToolLLM(), ToolExecutor(_registry(_same_chunk)),
+    llm = _AlwaysToolLLM()
+    loop = AgentLoop(llm, ToolExecutor(_registry(_same_chunk)),
                      # 上限 2，却跑满 5 轮 ⇒ 远超阈值
                      LoopConfig(max_iterations=5, max_steps_no_progress=2))
 
@@ -153,6 +167,25 @@ def test_no_progress_is_log_only_and_never_aborts(caplog) -> None:
     assert err.data.get("failure_kind") != failure.NO_PROGRESS
     # 反向证据：确实跨过了阈值（否则"没中止"是空谈）
     assert any("连续 2/2 步" in ln for ln in _progress_lines(caplog))
+    # ★ 动作确实发生：注记被**注入**（不是只写日志）
+    notes = _hint_notes(llm.seen[-1])
+    assert notes, "跨阈值却没有任何换策略注记 —— 动作出口又变空了"
+    assert len(notes) == 1, f"注记应只注入一次，实际 {len(notes)} 条"
+
+
+def test_strategy_hint_injected_only_once(caplog) -> None:
+    """注记只在**跨越阈值那一刻**注入一次；后续步不得重复注入（否则等于每步都在改 prompt）。"""
+    caplog.set_level(logging.INFO, logger=LOGGER_NAME)
+    llm = _AlwaysToolLLM()
+    loop = AgentLoop(llm, ToolExecutor(_registry(_same_chunk)),
+                     LoopConfig(max_iterations=7, max_steps_no_progress=2))
+
+    _run(loop)
+
+    for i, msgs in enumerate(llm.seen):
+        n = len(_hint_notes(msgs))
+        assert n <= 1, f"第 {i} 次调用里出现了 {n} 条换策略注记（应至多 1 条）"
+    assert len(_hint_notes(llm.seen[-1])) == 1, "跑满多轮后注记应恰好 1 条"
 
 
 def test_fresh_chunks_are_never_flagged(caplog) -> None:
