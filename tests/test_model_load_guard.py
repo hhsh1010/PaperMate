@@ -219,6 +219,43 @@ def test_lock_path_follows_data_dir(monkeypatch, tmp_path: Path) -> None:
     assert rl.lock_path().parent == tmp_path
 
 
+# ------------------------------------------------------- 打开锁文件的健壮性
+# 背景（真机验收抓出）：Windows 上杀软/索引器会扫刚创建的文件，此时 `os.open(O_RDWR)`
+# 会瞬时返回 EACCES。原先"一次失败就抛错"会让**正常启动被误杀** ⇒ 加了有限重试。
+
+
+def test_transient_open_denial_is_retried(tmp_path: Path, monkeypatch) -> None:
+    """瞬时被拒（模拟杀软扫文件）⇒ **有限重试后仍应成功**。"""
+    real_open = os.open
+    calls = {"n": 0}
+
+    def flaky_open(path, flags, *a, **kw):  # noqa: ANN001, ANN002, ANN003
+        calls["n"] += 1
+        if calls["n"] <= 3:
+            raise PermissionError(13, "Permission denied")
+        return real_open(path, flags, *a, **kw)
+
+    monkeypatch.setattr(rl.os, "open", flaky_open)
+    fd = rl.acquire(tmp_path / "l.lock", timeout_s=5)
+    assert fd is not None, "瞬时被拒后应当重试成功"
+    assert calls["n"] == 4
+    rl.release(fd)
+
+
+def test_persistent_open_denial_fails_clearly(tmp_path: Path, monkeypatch) -> None:
+    """持续被拒 ⇒ **明确报错**（既不无限重试，也不静默放行）。"""
+    monkeypatch.setattr(
+        rl.os, "open",
+        lambda *a, **kw: (_ for _ in ()).throw(PermissionError(13, "Permission denied")),
+    )
+    t0 = time.monotonic()
+    with pytest.raises(rl.ModelBusyError) as err:
+        rl.acquire(tmp_path / "l.lock", timeout_s=5)
+    spent = time.monotonic() - t0
+    assert spent < 6, f"应在 3s 重试预算内失败，实际 {spent:.1f}s（不能无限等）"
+    assert "无法打开" in str(err.value)
+
+
 @pytest.mark.parametrize("hold", [0.0, 0.1])
 def test_release_is_idempotent_safe(tmp_path: Path, hold: float) -> None:
     """释放语义：关闭 fd 即释放；重复释放不得抛错。"""
