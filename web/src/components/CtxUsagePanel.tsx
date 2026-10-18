@@ -146,7 +146,8 @@ export function CtxUsageBar({
         </button>
       )}
 
-      {open && (
+      <div className={`collapse${open ? " open" : ""}`}>
+        <div className="collapse-inner">
         <div className="ctx-panel" role="dialog" aria-label="上下文用量">
           <div className="ctx-panel-head">
             <span className="ctx-panel-title">上下文用量</span>
@@ -210,7 +211,8 @@ export function CtxUsageBar({
             总量取自厂商真实 token；分项按本地估算的**比例**分配总量（厂商不返回分项明细）
           </div>
         </div>
-      )}
+        </div>
+      </div>
     </span>
   );
 }

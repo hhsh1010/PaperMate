@@ -32,7 +32,9 @@ export function ToolCallCard({ tool }: { tool: ToolCallView }) {
         </span>
         <span className="tool-chevron" aria-hidden="true"><Icons.chevronRight size={14} /></span>
       </button>
-      {open && (
+      {/* 常挂载 + class 控制高度：收起时平滑过渡（原来条件挂载会"啪"地消失）*/}
+      <div className={`collapse${open ? " open" : ""}`}>
+        <div className="collapse-inner">
         <div className="tool-body">
           <div>
             <strong>参数</strong>
@@ -45,7 +47,8 @@ export function ToolCallCard({ tool }: { tool: ToolCallView }) {
             </div>
           )}
         </div>
-      )}
+        </div>
+      </div>
     </div>
   );
 }

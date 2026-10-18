@@ -7246,3 +7246,26 @@ input, select, textarea { font-family: inherit; }
 @media (prefers-reduced-motion: reduce) {
   .paper-queue-list { transition: none; }
 }
+
+/* ---- 通用折叠（2026-10-19）：展开/收起用 grid-template-rows 0fr↔1fr 过渡 ----
+   用法：<div className={`collapse${open ? " open" : ""}`}><div className="collapse-inner">…</div></div>
+   ★ height:auto 无法过渡，grid-template-rows 是标准解法。
+   ★ 必须**常挂载**才能过渡；条件挂载（`{open && ...}`）会"啪"地消失。 */
+.collapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  /* ★ 收起的区域虽然高度为 0，但内部按钮**仍可被 Tab 聚焦**（overflow:hidden 不移出 tab 顺序）
+     ⇒ 用 visibility 兜住（它会把子树从无障碍树和 tab 顺序里移除）。
+     过渡结束后才切 hidden，所以动画仍然完整。 */
+  visibility: hidden;
+  transition: grid-template-rows 0.18s ease, visibility 0s linear 0.18s;
+}
+.collapse.open {
+  grid-template-rows: 1fr;
+  visibility: visible;
+  transition: grid-template-rows 0.18s ease, visibility 0s;
+}
+.collapse > .collapse-inner { overflow: hidden; min-height: 0; }
+@media (prefers-reduced-motion: reduce) {
+  .collapse { transition: none; }
+}
