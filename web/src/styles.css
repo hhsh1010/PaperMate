@@ -6977,3 +6977,46 @@ input, select, textarea { font-family: inherit; }
 .doc-table-name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .doc-table-time { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .paper-queue-at { color: var(--muted); }
+
+/* ---- 弹窗四边统一（2026-10-18）----
+   背景：项目里有两套弹窗（新 `modal-card` / 旧 `modal`，旧版仍被阅读器、用量明细等 7 处使用），
+   四边各不相同：圆角 `--radius` vs `--radius-lg`、有的没边框、`.modal-card` 没做溢出裁剪
+   ⇒ **灰底 footer 会溢出圆角**，底部两角看起来是方的（用户反馈的正是这个）。
+   这里把两套系统的几何收敛成同一套；标题字号/字重、关闭按钮也一并统一。 */
+.modal-card {
+  overflow: hidden;                       /* ★ 关键：让 footer/head 的底色被圆角裁掉 */
+}
+.modal {
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-pop);
+}
+.modal-card, .modal { background: var(--surface); }
+.modal-head .reader-title,
+.modal-head h3 { font-size: 16px; font-weight: 500; color: var(--text-strong); letter-spacing: -0.01em; }
+.modal-head .icon-btn {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.modal-head .icon-btn:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
+
+/* 表单类弹窗里的按钮行：与 .modal-footer 同款对齐（右对齐、同一间距），但保留在 body 内 */
+.modal-footer-inline { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+
+/* 表单类弹窗（创建工作间 / 归入文献集）里的按钮：对齐 + 形状都跟 .modal-btn 一致
+   —— 只改样式不动组件（那两处按钮原来用 .batch-btn，是胶囊形且整行堆叠，看着像另一个产品） */
+.coll-modal .coll-manage-row { justify-content: flex-end; gap: 10px; }
+.coll-modal .batch-btn {
+  border-radius: var(--radius-sm);
+  padding: 8px 16px;
+  font-size: 13px;
+  border: none;
+}
+.coll-modal .batch-btn.ghost { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
+.coll-modal .batch-btn.ghost:hover { background: var(--surface-3); border-color: var(--border-strong); }
+.coll-modal .batch-btn.primary { background: var(--accent); color: var(--on-accent); }
+.coll-modal .batch-btn.primary:hover { background: var(--accent-hover); }
