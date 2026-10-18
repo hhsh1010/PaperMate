@@ -303,6 +303,15 @@
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
 
+/* ★ 滚动条**稳定占位**（2026-10-19）：任何"让页面变高/变矮"的展开收起（导入队列、工具卡片…）
+   都会让滚动条出现/消失 ⇒ 内容宽度差 15px ⇒ 整页**左右横跳**（用户报的「收起时两个标签左右跳」正是这个）。
+   ⚠️ 注意挂在哪：`.app` 是 `overflow: hidden`，**真正的滚动条在这些页面级容器上**
+   （`.doc-library-page` 等有 `overflow-y: auto`）⇒ 只加在 html/body 上是**无效的**（实际踩过）。 */
+.doc-library-page,
+.usage-page,
+.eval-page,
+.home-page { scrollbar-gutter: stable; }
+
 body {
   font-family: var(--font);
   background: var(--bg);
