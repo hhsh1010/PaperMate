@@ -239,7 +239,9 @@ async def test_throttle_enforces_min_interval() -> None:
     await client.search("a")
     await arxiv.search("b")
     elapsed = time.monotonic() - t0
-    assert elapsed >= 0.15, f"两次请求仅相隔 {elapsed:.3f}s（应 ≥ 0.15s）"
+    # 容差 0.02s：asyncio 定时器与 monotonic 的粒度会让"刚好等满 0.15s"偶发测成 0.149
+    # （历史：本用例曾因此偶发红 ✗）。判据仍是"确实等了接近一个间隔"，不是"精确等于"。
+    assert elapsed >= 0.15 - 0.02, f"两次请求仅相隔 {elapsed:.3f}s（应 ≥ 0.15s）"
 
 
 async def test_concurrent_calls_are_serialized_by_throttle() -> None:

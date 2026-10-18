@@ -7,8 +7,15 @@ import {
   TOP_CATEGORIES,
   buildImportPayload,
   chineseHint,
+  parseSearchHistory,
+  pushSearchHistory,
   type Scope,
+  type SearchHistoryEntry,
 } from "../lib/paperSearch";
+import { timeAgo } from "../lib/time";
+
+/** 检索历史的 localStorage 键（只存"关键词 + 时间"，不含任何论文数据） */
+const HISTORY_KEY = "papermate.paperSearch.history";
 
 /**
  * 论文在线检索抽屉（阶段 3）。
@@ -40,6 +47,8 @@ export function SearchPaperDrawer({
   const [searched, setSearched] = useState(false);
   // 中文术语被替换的明细（**必须明示给用户**，不能悄悄换词）
   const [translated, setTranslated] = useState<{ zh: string; en: string }[]>([]);
+  // 最近检索（带时间戳）；存在 localStorage，**只存关键词与时间**
+  const [history, setHistory] = useState<SearchHistoryEntry[]>([]);
   const [used, setUsed] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -53,6 +62,11 @@ export function SearchPaperDrawer({
       if (e.key === "Escape") onClose();
     };
     window.addEventListener("keydown", onKey);
+    try {
+      setHistory(parseSearchHistory(window.localStorage.getItem(HISTORY_KEY)));
+    } catch {
+      /* 隐私模式等拿不到 localStorage ⇒ 静默降级为"没有历史" */
+    }
     const t = window.setTimeout(() => inputRef.current?.focus(), 30);
     return () => {
       window.removeEventListener("keydown", onKey);
@@ -60,8 +74,9 @@ export function SearchPaperDrawer({
     };
   }, [open, onClose]);
 
-  const doSearch = useCallback(async () => {
-    const text = q.trim();
+  const doSearch = useCallback(async (textArg?: string) => {
+    // textArg：点历史 chips 时直接用那条关键词搜（不必等 setQ 生效）
+    const text = (textArg ?? q).trim();
     if (!text) {
       setErr("请输入检索关键词");
       return;
@@ -80,6 +95,16 @@ export function SearchPaperDrawer({
       setUsed(res.query_used || text);
       setSelected(new Set());
       setSearched(true);
+      // 记历史：同词只保留一条（提到最前并刷新时间戳）
+      setHistory((prev) => {
+        const next = pushSearchHistory(prev, text, new Date().toISOString());
+        try {
+          window.localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
+        } catch {
+          /* 存不进去不影响这次检索 */
+        }
+        return next;
+      });
     } catch (e) {
       // 403（功能未开启）/ 400（参数不合法）/ 502（上游失败）都要**如实显示**
       const msg = e instanceof Error ? e.message : String(e);
@@ -192,6 +217,39 @@ export function SearchPaperDrawer({
           支持 <code>AND</code> / <code>OR</code> / <code>&quot;精确词组&quot;</code> / <code>cat:cs.CL</code>
           ，也可直接写 <code>ti:</code> <code>au:</code> 前缀
         </div>
+
+        {history.length > 0 && (
+          <div className="paper-history">
+            <span className="paper-history-label">最近检索</span>
+            {history.map((h) => (
+              <button
+                key={h.q}
+                className="paper-history-item"
+                title={`${h.q} · ${new Date(h.at).toLocaleString()}`}
+                onClick={() => {
+                  setQ(h.q);
+                  void doSearch(h.q);
+                }}
+              >
+                <span className="paper-history-q">{h.q}</span>
+                <span className="paper-history-at">{timeAgo(h.at)}</span>
+              </button>
+            ))}
+            <button
+              className="paper-history-clear"
+              onClick={() => {
+                setHistory([]);
+                try {
+                  window.localStorage.removeItem(HISTORY_KEY);
+                } catch {
+                  /* ignore */
+                }
+              }}
+            >
+              清除
+            </button>
+          </div>
+        )}
 
         {translated.length > 0 && (
           <div className="paper-warn">

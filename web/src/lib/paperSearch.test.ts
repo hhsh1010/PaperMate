@@ -16,6 +16,8 @@ import {
   hasActionableTask,
   hasChinese,
   mergeTasks,
+  parseSearchHistory,
+  pushSearchHistory,
   taskStatusText,
   type ImportTaskView,
   type PaperHit,
@@ -162,5 +164,36 @@ describe('任务合并（切页/刷新后恢复）', () => {
   it('空输入不炸', () => {
     expect(mergeTasks([], [])).toEqual([]);
     expect(mergeTasks([{ id: 'x' }], [])).toHaveLength(1);
+  });
+});
+
+describe('检索历史（带时间戳）', () => {
+  const at = '2026-10-18T14:00:00Z';
+
+  it('新记录在最前，且同词只保留一条（提到最前 + 更新时间）', () => {
+    let h = pushSearchHistory([], 'rag', at);
+    h = pushSearchHistory(h, 'diffusion', at);
+    h = pushSearchHistory(h, 'rag', '2026-10-18T15:00:00Z');
+    expect(h.map((x) => x.q)).toEqual(['rag', 'diffusion']);
+    expect(h[0].at).toBe('2026-10-18T15:00:00Z');   // 时间戳被更新，不是留旧的
+  });
+
+  it('去首尾空白；空查询不记（防"点了检索但没输入"污染历史）', () => {
+    expect(pushSearchHistory([], '  ', at)).toEqual([]);
+    expect(pushSearchHistory([], ' rag ', at)[0].q).toBe('rag');
+  });
+
+  it('超出上限截断（默认 8）', () => {
+    let h: ReturnType<typeof pushSearchHistory> = [];
+    for (let i = 0; i < 12; i += 1) h = pushSearchHistory(h, `q${i}`, at, 5);
+    expect(h).toHaveLength(5);
+    expect(h[0].q).toBe('q11');
+  });
+
+  it('脏 localStorage 不炸（非法 JSON / 非数组 / 空项）', () => {
+    expect(parseSearchHistory(null)).toEqual([]);
+    expect(parseSearchHistory('not json')).toEqual([]);
+    expect(parseSearchHistory('{"a":1}')).toEqual([]);
+    expect(parseSearchHistory('[{"q":"x","at":"t"},{"q":"  "},{"nope":1}]')).toEqual([{ q: 'x', at: 't' }]);
   });
 });

@@ -646,25 +646,9 @@ export function DocumentPreviewPanel({
             </div>
             {/* 未缩放（默认 100%）→ ‹› 切换文档（所有格式）；已缩放 → ‹› 翻页（仅 PDF）；
                 判据改为 zoom 状态（2026-09-07），与全屏阅读 expanded 解耦。*/}
-            {zoom === 100 ? (
-              <div className="page-nav" title="滚轮/‹› 切换文档">
-                <button
-                  aria-label="上一个文档"
-                  disabled={activeIndex <= 0}
-                  onClick={() => activeIndex > 0 && onSwitch(docs[activeIndex - 1].id)}
-                >
-                  ‹
-                </button>
-                <button
-                  aria-label="下一个文档"
-                  disabled={activeIndex < 0 || activeIndex >= docs.length - 1}
-                  onClick={() => activeIndex < docs.length - 1 && onSwitch(docs[activeIndex + 1].id)}
-                >
-                  ›
-                </button>
-              </div>
-            ) : (
-              fmt === "PDF" && (
+              {/* 已缩放 → ‹› 翻页（仅 PDF）。
+                  「切换文档」已移到「添加文档 / 导出」上方（原来只有一对 ‹›，找不到也不会用）*/}
+              {zoom !== 100 && fmt === "PDF" && (
                 <div className="page-nav" title="‹› 翻页 · 滚轮滚动浏览">
                   <button aria-label="上一页" disabled={activePage <= 1} onClick={() => setPage(-1)}>
                     ‹
@@ -677,8 +661,7 @@ export function DocumentPreviewPanel({
                     ›
                   </button>
                 </div>
-              )
-            )}
+              )}
           </div>
 
           {/* 内容渲染：PDF→服务端栅格图（MuPDF）/ 文本→预格式；滚轮翻页（L4：原生监听，见上方 effect） */}
@@ -708,7 +691,7 @@ export function DocumentPreviewPanel({
           {fmt === "PDF" && (
             <div className="preview-wheel-hint">
               {zoom === 100
-                ? "滚轮 / ‹ › 切换文档 · Ctrl+滚轮缩放"
+                ? "滚轮切换文档 · Ctrl+滚轮缩放"
                 : "滚轮滚动浏览 · ‹ › 翻页 · Ctrl+滚轮缩放"}
             </div>
           )}
@@ -716,6 +699,23 @@ export function DocumentPreviewPanel({
           {/* 底部操作：添加 / 导出（2026-09-07 改造）
               - 添加文档按钮从 Tab 栏移至此，与导出并列；
               - 移除文档只保留 Tab 栏的 ×（onCloseDoc 同源，已按会话 config.workspace 判定走工作间解绑）。 */}
+          {/* 文档切换（从头部移下来：原来只有一对 ‹› 图标，找不到也不会用）
+              - 带文字标签 + 「第 N / M 篇」位置，一眼知道在哪；
+              - 只有一个文档时整行不渲染。 */}
+          {docs.length > 1 && (
+            <div className="doc-switch">
+              <button className="doc-switch-btn" disabled={activeIndex <= 0}
+                onClick={() => activeIndex > 0 && onSwitch(docs[activeIndex - 1].id)}>
+                ‹ 上一篇
+              </button>
+              <span className="doc-switch-pos">{Math.max(1, activeIndex + 1)} / {docs.length}</span>
+              <button className="doc-switch-btn" disabled={activeIndex < 0 || activeIndex >= docs.length - 1}
+                onClick={() => activeIndex < docs.length - 1 && onSwitch(docs[activeIndex + 1].id)}>
+                下一篇 ›
+              </button>
+            </div>
+          )}
+
           <div className="export-btn-group export-actions">
             {exportMsg && <div className={`export-msg ${exportMsg.ok ? "ok" : "err"}`}>{exportMsg.text}</div>}
             <button

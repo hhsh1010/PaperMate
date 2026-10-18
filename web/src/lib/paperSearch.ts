@@ -161,3 +161,49 @@ export function mergeTasks<T extends { id: string }>(prev: T[], incoming: T[]): 
   const incomingIds = new Set(incoming.map((t) => t.id));
   return [...incoming, ...prev.filter((t) => !incomingIds.has(t.id))];
 }
+
+/** 一条检索历史（带时间戳：用户要求"能加时间戳的地方都加上"）。 */
+export type SearchHistoryEntry = {
+  q: string;
+  /** ISO 时间串（落 localStorage，展示交给 timeAgo） */
+  at: string;
+};
+
+/** 历史条数上限（再多就沉底了，检索框下面放不下） */
+export const HISTORY_MAX = 8;
+
+/**
+ * 把一次检索压入历史（**纯函数**，不碰 localStorage）。
+ *
+ * 规则：
+ * - 去首尾空白；空串直接返回原列表（不记空查询）；
+ * - **同一关键词只保留最新一次**（提到最前 + 更新时间）—— 否则反复搜同一个词会把历史刷满；
+ * - 超出 `max` 截断。
+ */
+export function pushSearchHistory(
+  list: SearchHistoryEntry[],
+  q: string,
+  at: string,
+  max: number = HISTORY_MAX,
+): SearchHistoryEntry[] {
+  const text = (q || "").trim();
+  if (!text) return list;
+  const rest = list.filter((x) => x.q !== text);
+  return [{ q: text, at }, ...rest].slice(0, Math.max(1, max));
+}
+
+/** 从 localStorage 读历史时的**防御性解析**（脏数据不许把界面搞崩）。 */
+export function parseSearchHistory(raw: string | null): SearchHistoryEntry[] {
+  if (!raw) return [];
+  try {
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .filter((x): x is { q: unknown; at: unknown } => !!x && typeof x === "object")
+      .map((x) => ({ q: String(x.q ?? "").trim(), at: String(x.at ?? "") }))
+      .filter((x) => x.q.length > 0)
+      .slice(0, HISTORY_MAX);
+  } catch {
+    return [];
+  }
+}
