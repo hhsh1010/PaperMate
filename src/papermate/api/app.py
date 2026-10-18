@@ -25,6 +25,8 @@ from ..models.db import init_db, make_engine
 from ..services.chat_service import ChatService
 from ..services.collection_service import CollectionService
 from ..services.document_service import DocumentService
+from ..services.paper_import import PaperImportService
+from ..services.paper_search import ArxivClient
 from ..services.processing_service import ProcessingService
 from ..services.session_service import SessionService
 from ..services.summary_service import SummaryService
@@ -39,6 +41,7 @@ from .routes_feedback import router as feedback_router
 from .routes_files import router as files_router
 from .routes_memory import router as memory_router
 from .routes_metrics import router as metrics_router
+from .routes_papers import router as papers_router
 from .routes_processing import router as processing_router
 from .routes_prompt import router as prompt_router
 from .routes_search import router as search_router
@@ -172,6 +175,10 @@ def create_app() -> FastAPI:
     app.state.settings = settings
     app.state.session_svc = session_svc
     app.state.doc_svc = doc_svc
+    # 论文检索/导入（阶段 2）：检索客户端**必须单例**（它的 3s 节流是实例级的），
+    # 导入服务持有任务表，也必须是单例。
+    app.state.paper_search = ArxivClient()
+    app.state.paper_import = PaperImportService(doc_svc)
     app.state.chat_svc = chat_svc
     app.state.summary_svc = summary_svc
     app.state.processing_svc = processing_svc
@@ -186,6 +193,7 @@ def create_app() -> FastAPI:
     app.include_router(prompt_router, prefix="/api/v1")
     app.include_router(transform_router, prefix="/api/v1")
     app.include_router(documents_router, prefix="/api/v1")
+    app.include_router(papers_router, prefix="/api/v1")
     app.include_router(eval_router, prefix="/api/v1")
     app.include_router(search_router, prefix="/api/v1")
     app.include_router(usage_router, prefix="/api/v1")

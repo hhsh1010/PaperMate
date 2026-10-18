@@ -887,6 +887,33 @@ class DocumentService:
         nxt["pct"] = self._upload_pct(nxt["done"], nxt["total"])
         self._upload_progress[doc_id] = nxt
 
+    def merge_meta(self, doc_id: int, patch: dict) -> bool:
+        """把 ``patch`` **合并**进 ``documents.meta_json``（不改表结构）。
+
+        用途：论文导入后补写来源信息（`{"paper": {source, source_id, version, title, url}}`）。
+
+        ★ 调用时机很关键：``_process_phase2`` 在解析结束时会**整体重写** ``meta_json``，
+        所以在处理**完成之后**再调用才不会丢（`paper_import` 正是放在 ready 之后写的）。
+        合并语义是**浅合并**（顶层键覆盖），够用且可预期。
+        """
+        def _do() -> bool:
+            with self._Session() as db:
+                d = db.get(Document, doc_id)
+                if d is None:
+                    return False
+                try:
+                    cur = json.loads(d.meta_json or "{}")
+                    if not isinstance(cur, dict):
+                        cur = {}
+                except (TypeError, ValueError):
+                    cur = {}
+                cur.update(patch)
+                d.meta_json = json.dumps(cur, ensure_ascii=False)
+                db.commit()
+                return True
+
+        return bool(write_with_retry(_do))
+
     def get_upload_progress(self, doc_id: int) -> dict | None:
         """返回上传进度快照；无条目时回退到 DB 当前状态（已完成很久的文档仍可被轮询到）。
 
