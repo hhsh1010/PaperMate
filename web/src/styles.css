@@ -7232,3 +7232,17 @@ input, select, textarea { font-family: inherit; }
   transform: none;
 }
 .paper-zh-item { display: inline-flex; align-items: center; gap: 6px; }
+
+/* 队列展开/收起：用 grid-template-rows 0fr→1fr 过渡（height:auto 无法过渡）
+   —— 原来是条件挂载，点「收起」瞬间消失，下面内容硬跳一下，用户感知为"跳动"。 */
+.paper-queue-list {
+  display: grid;
+  grid-template-rows: 0fr;
+  border-top: 1px solid transparent;
+  transition: grid-template-rows 0.18s ease, border-color 0.18s ease;
+}
+.paper-queue-list.open { grid-template-rows: 1fr; border-top-color: var(--border); }
+.paper-queue-list-inner { overflow: hidden; }
+@media (prefers-reduced-motion: reduce) {
+  .paper-queue-list { transition: none; }
+}

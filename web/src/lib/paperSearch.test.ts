@@ -160,7 +160,14 @@ describe('任务合并（切页/刷新后恢复）', () => {
     expect(merged.find((x) => x.id === 'a')?.v).toBe(2);  // 以 incoming 为准
   });
 
-  it('顺序：incoming 在前，其余保持原序', () => {
+  it('KEEP_POS: 已存在的任务保持原位（轮询更新不能重排，否则列表每 1.5s 跳一次）', () => {
+    const prev = [{ id: 'a', v: 1 }, { id: 'b', v: 1 }, { id: 'c', v: 1 }];
+    const merged = mergeTasks(prev, [{ id: 'c', v: 2 }]);
+    expect(merged.map((x) => x.id)).toEqual(['a', 'b', 'c']);
+    expect(merged.find((x) => x.id === 'c')?.v).toBe(2);
+  });
+
+  it('NEW_FIRST: 新任务才放最前', () => {
     const merged = mergeTasks([{ id: 'old1' }, { id: 'old2' }], [{ id: 'new1' }]);
     expect(merged.map((x) => x.id)).toEqual(['new1', 'old1', 'old2']);
   });

@@ -149,8 +149,8 @@ export function PaperImportQueue({
         <span className="paper-queue-toggle">{open ? "收起" : "查看"}</span>
       </button>
 
-      {open && (
-        <div className="paper-queue-list">
+      <div className={`paper-queue-list${open ? " open" : ""}`}>
+        <div className="paper-queue-list-inner">
           {tasks.map((t) => {
             const pct = downloadPct(t);
             const text = taskStatusText(t, docProg[t.id]);
@@ -191,7 +191,7 @@ export function PaperImportQueue({
             );
           })}
         </div>
-      )}
+      </div>
     </div>
   );
 }

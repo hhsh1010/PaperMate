@@ -158,8 +158,14 @@ export function hasActionableTask(tasks: ImportTaskView[]): boolean {
  * 旧的只保留 incoming 里没有的（顺序保持"新的在前"）。
  */
 export function mergeTasks<T extends { id: string }>(prev: T[], incoming: T[]): T[] {
-  const incomingIds = new Set(incoming.map((t) => t.id));
-  return [...incoming, ...prev.filter((t) => !incomingIds.has(t.id))];
+  // ★ 已存在的任务：**原地替换**（保持它原来在第几行）。
+  //   轮询每 1.5s 一次，若把"刚拿到的"提到最前，列表会在用户眼皮底下不停重排 —— 这就是"跳动"的来源之一。
+  const incomingById = new Map(incoming.map((t) => [t.id, t]));
+  const kept = prev.map((t) => incomingById.get(t.id) ?? t);
+  // 只有**新任务**才放最前（刚提交/刚恢复时"最新"的语义成立）
+  const prevIds = new Set(prev.map((t) => t.id));
+  const fresh = incoming.filter((t) => !prevIds.has(t.id));
+  return [...fresh, ...kept];
 }
 
 /** 一条检索历史（带时间戳：用户要求"能加时间戳的地方都加上"）。 */
