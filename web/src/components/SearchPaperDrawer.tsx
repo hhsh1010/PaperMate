@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { Icons } from "../lib/icons";
 import { api } from "../api/client";
 import type { PaperHitDto, PaperImportTaskDto } from "../api/client";
 import {
@@ -283,11 +284,13 @@ export function SearchPaperDrawer({
               {c}
             </button>
           ))}
-        </div>
-
-        <div className="paper-syntax">
-          支持 <code>AND</code> / <code>OR</code> / <code>&quot;精确词组&quot;</code> / <code>cat:cs.CL</code>
-          ，也可直接写 <code>ti:</code> <code>au:</code> 前缀
+          {/* 语法提示改成悬浮：平时只占一个小 ⓘ，省一整行 */}
+          <span className="paper-syntax-tip" tabIndex={0} aria-label="检索语法说明">
+            <Icons.info size={13} />
+            <span className="paper-syntax-pop">
+              支持 AND / OR / &quot;精确词组&quot; / cat:cs.CL，也可直接写 ti: au: 前缀
+            </span>
+          </span>
         </div>
 
         {history.length > 0 && (
@@ -325,21 +328,19 @@ export function SearchPaperDrawer({
 
         {translated.length > 0 && (
           <div className="paper-zh-map">
-            <div className="paper-zh-map-label">已自动换成英文关键词</div>
-            <ul className="paper-zh-map-list">
-              {translated.map((x) => (
-                <li key={x.zh}>
-                  <span className="paper-zh-zh">{x.zh}</span>
-                  <span className="paper-zh-arrow" aria-hidden="true">
-                    →
-                  </span>
-                  <span className="paper-zh-en">{x.en}</span>
-                </li>
-              ))}
-            </ul>
-            {/* 翻译"完全覆盖"查询时不重复显示同一个串（截图里的冗余正是这个） */}
+            <span className="paper-zh-map-label">已换成</span>
+            {translated.map((x) => (
+              <span key={x.zh} className="paper-zh-item">
+                <span className="paper-zh-zh">{x.zh}</span>
+                <span className="paper-zh-arrow" aria-hidden="true">
+                  →
+                </span>
+                <span className="paper-zh-en">{x.en}</span>
+              </span>
+            ))}
+            {/* 完全覆盖查询时不重复显示同一个串 */}
             {!isFullyMapped(translated, used) && (
-              <div className="paper-zh-used">实际检索：{used}</div>
+              <span className="paper-zh-used">实际检索：{used}</span>
             )}
           </div>
         )}

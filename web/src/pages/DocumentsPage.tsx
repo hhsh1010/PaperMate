@@ -543,9 +543,9 @@ export function DocumentsPage({
         </div>
         <div className="page-header-actions">
             <button className="ghost-btn" onClick={() => setPaperOpen(true)}>
-              检索论文
+              <Icons.search size={14} /> 搜索论文
             </button>
-          <label className="upload-btn primary">
+          <label className="upload-btn">
             <Icons.upload size={15} />
           上传文档
             <input
@@ -580,7 +580,13 @@ export function DocumentsPage({
                 }}
             />
           </label>
-          <button className="ghost-btn" onClick={refresh} disabled={loading}>
+          <button
+            className={loading ? "ghost-btn refreshing" : "ghost-btn"}
+            onClick={refresh}
+            disabled={loading}
+            aria-busy={loading}
+            title="刷新列表"
+          >
             <Icons.refresh size={14} />
             {loading ? "加载中…" : "刷新"}
           </button>
