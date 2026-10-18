@@ -149,3 +149,15 @@ export function activeTaskCount(tasks: ImportTaskView[]): number {
 export function hasActionableTask(tasks: ImportTaskView[]): boolean {
   return tasks.some((t) => t.status === 'failed' || (t.status === 'ready' && !!t.doc_id));
 }
+
+/**
+ * 合并任务列表（去重 + 新数据覆盖旧数据）。
+ *
+ * 为什么不直接 setState([...incoming, ...prev])：同一任务会被后端更新（下载 % / 阶段变化），
+ * 直接拼接会出现**两条同 id 的任务**，进度看起来随机跳。这里以 **incoming 为准**，
+ * 旧的只保留 incoming 里没有的（顺序保持"新的在前"）。
+ */
+export function mergeTasks<T extends { id: string }>(prev: T[], incoming: T[]): T[] {
+  const incomingIds = new Set(incoming.map((t) => t.id));
+  return [...incoming, ...prev.filter((t) => !incomingIds.has(t.id))];
+}

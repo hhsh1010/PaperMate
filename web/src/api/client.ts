@@ -352,6 +352,11 @@ export const api = {
     );
   },
 
+  /** 列出最近的导入任务（切页/刷新后恢复进度用）。 */
+  async listPaperImportTasks(): Promise<{ tasks: PaperImportTaskDto[] }> {
+    return json(await fetch(`${BASE}/papers/import`));
+  },
+
   async getPaperImportTask(id: string): Promise<PaperImportTaskDto> {
     return json(await fetch(`${BASE}/papers/import/${encodeURIComponent(id)}`));
   },

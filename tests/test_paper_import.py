@@ -479,3 +479,46 @@ def test_search_reports_remaining_chinese(client, monkeypatch) -> None:
     assert got["q"] == "RAG 的评估"
     assert body["remaining_chinese"] is True
     assert body["translations"] == []
+
+
+def test_list_tasks_restores_after_switch(client, monkeypatch) -> None:
+    """★ 切页/刷新后能恢复：`GET /papers/import` 必须列出**仍在跑**的任务。
+
+    这是用户报过的真实问题：导入中切到别的页面，进度"丢了"（其实后端还在跑）。
+    """
+    monkeypatch.setenv("PAPERMATE_ENABLE_PAPER_SEARCH", "1")
+    svc = client.app.state.paper_import
+
+    # 用假文档服务 + 永远返回 503 的传输，制造一个会失败的任务（不必真联网）
+    class _Docs:
+        def check_duplicate(self, filename, content):
+            return {"duplicate": False, "same_name": False, "existing": None}
+
+        async def upload_and_process(self, filename, content, block=False):
+            raise AssertionError("不该走到入库")
+
+        def get_document(self, doc_id):
+            return None
+
+        def merge_meta(self, doc_id, patch):
+            return True
+
+    import httpx as _httpx
+
+    from papermate.services.paper_import import PaperImportService
+
+    monkeypatch.setattr(
+        client.app.state, "paper_import",
+        PaperImportService(_Docs(), transport=_httpx.MockTransport(lambda r: _httpx.Response(503)),
+                           max_retries=0, backoff_base=0.0),
+    )
+    created = client.post("/api/v1/papers/import",
+                          json={"items": [{"pdf_url": "https://arxiv.org/pdf/2401.00001v1"}]})
+    assert created.status_code == 200
+    tid = created.json()["tasks"][0]["id"]
+
+    listed = client.get("/api/v1/papers/import")
+    assert listed.status_code == 200
+    ids = [t["id"] for t in listed.json()["tasks"]]
+    assert tid in ids, "刷新/切页后应能通过列表接口找回该任务"
+    assert svc is not None

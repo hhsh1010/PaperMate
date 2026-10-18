@@ -15,6 +15,7 @@ import {
   formatBytes,
   hasActionableTask,
   hasChinese,
+  mergeTasks,
   taskStatusText,
   type ImportTaskView,
   type PaperHit,
@@ -141,5 +142,25 @@ describe('队列汇总', () => {
     expect(hasActionableTask([task({ status: 'failed' })])).toBe(true);
     expect(hasActionableTask([task({ status: 'ready', doc_id: 7 })])).toBe(true);
     expect(hasActionableTask([task({ status: 'ready', doc_id: null })])).toBe(false);
+  });
+});
+
+describe('任务合并（切页/刷新后恢复）', () => {
+  it('去重且**新数据覆盖旧数据**（同一任务不能出现两条）', () => {
+    const prev = [{ id: 'a', v: 1 }, { id: 'b', v: 1 }];
+    const incoming = [{ id: 'a', v: 2 }];     // 后端把 a 更新了
+    const merged = mergeTasks(prev, incoming);
+    expect(merged).toHaveLength(2);
+    expect(merged.find((x) => x.id === 'a')?.v).toBe(2);  // 以 incoming 为准
+  });
+
+  it('顺序：incoming 在前，其余保持原序', () => {
+    const merged = mergeTasks([{ id: 'old1' }, { id: 'old2' }], [{ id: 'new1' }]);
+    expect(merged.map((x) => x.id)).toEqual(['new1', 'old1', 'old2']);
+  });
+
+  it('空输入不炸', () => {
+    expect(mergeTasks([], [])).toEqual([]);
+    expect(mergeTasks([{ id: 'x' }], [])).toHaveLength(1);
   });
 });

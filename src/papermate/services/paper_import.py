@@ -168,6 +168,15 @@ class PaperImportService:
         handle.add_done_callback(lambda _t, tid=task.id: self._handles.pop(tid, None))
         return task
 
+    def list_tasks(self, *, limit: int = 50) -> list[ImportTask]:
+        """列出**最近的**任务（新的在前）。
+
+        ★ 为什么需要它：任务状态原本只活在前端组件里 ⇒ 用户切到别的页面（组件卸载）
+        进度就"丢"了，而后端其实还在跑。有了这个接口，前端重新挂载时拉一次就能恢复。
+        """
+        items = sorted(self._tasks.values(), key=lambda t: -t.created_at)
+        return items[: max(1, int(limit))]
+
     def get(self, task_id: str) -> ImportTask | None:
         return self._tasks.get(task_id)
 

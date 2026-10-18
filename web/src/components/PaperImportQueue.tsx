@@ -5,6 +5,7 @@ import type { PaperImportTaskDto } from "../api/client";
 import {
   activeTaskCount,
   downloadPct,
+  mergeTasks,
   taskStatusText,
 } from "../lib/paperSearch";
 
@@ -22,11 +23,21 @@ export function usePaperImportTasks() {
 
   const add = useCallback((incoming: PaperImportTaskDto[]) => {
     if (!incoming || incoming.length === 0) return;
-    setTasks((prev) => {
-      const seen = new Set(prev.map((t) => t.id));
-      return [...incoming.filter((t) => !seen.has(t.id)), ...prev];
-    });
+    setTasks((prev) => mergeTasks(prev, incoming));
   }, []);
+
+  // ★ 挂载即恢复：切到别的页面（组件卸载）再回来、或刷新页面后，
+  //   从后端把**仍在跑**的任务拉回来 —— 否则用户会以为"进度丢了"（其实是后端还在跑）。
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await api.listPaperImportTasks();
+        add(res.tasks ?? []);
+      } catch {
+        /* 列表拉不到不影响正常使用（比如功能未开启） */
+      }
+    })();
+  }, [add]);
 
   const cancel = useCallback(async (id: string) => {
     try {

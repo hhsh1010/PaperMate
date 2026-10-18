@@ -200,6 +200,18 @@ async def import_papers(payload: ImportRequestIn, request: Request) -> ImportCre
     return ImportCreatedOut(tasks=[ImportTaskOut(**t.as_dict()) for t in tasks])
 
 
+@router.get("/papers/import", response_model=ImportCreatedOut)
+def list_import_tasks(request: Request, limit: int = 50) -> ImportCreatedOut:
+    """列出最近的导入任务。
+
+    ★ 前端切页/刷新后据此**恢复进度**（任务仍在后端跑，进度不该因为换了页面就消失）。
+    注意：本路由必须声明在 `/papers/import/{task_id}` **之前**（字面路径优先）。
+    """
+    _require_enabled()
+    svc = _import_svc(request)
+    return ImportCreatedOut(tasks=[ImportTaskOut(**t.as_dict()) for t in svc.list_tasks(limit=limit)])
+
+
 @router.get("/papers/import/{task_id}", response_model=ImportTaskOut)
 def get_import_task(task_id: str, request: Request) -> ImportTaskOut:
     """查任务状态。`ingesting` 阶段请同时轮询 `/documents/{doc_id}/progress` 看细粒度进度。"""
