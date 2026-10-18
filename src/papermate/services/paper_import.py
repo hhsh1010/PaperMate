@@ -31,6 +31,7 @@ import re
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from urllib.parse import urlparse
 
 import httpx
@@ -142,6 +143,8 @@ class ImportTask:
             "doc_id": self.doc_id,
             "duplicate": self.duplicate,
             "error": self.error,
+            # ★ 给前端 timeAgo 用的 ISO 串（float 时间戳前端不好直接渲染）
+            "created_at_iso": datetime.fromtimestamp(self.created_at, tz=UTC).isoformat(),
         }
 
 

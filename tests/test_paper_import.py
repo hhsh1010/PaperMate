@@ -561,3 +561,15 @@ async def test_import_uses_title_as_filename() -> None:
     done = await _settle(svc, task.id)
     assert done.status == "ready"
     assert docs.uploads[0][0] == "FAIR-RAG Faithful Adaptive Iterative Refinement.pdf"
+
+
+async def test_task_exposes_iso_timestamp() -> None:
+    """★ 任务出参要带**可解析的 ISO 时间**（前端 timeAgo 需要 ISO，float 不好直接用）。"""
+    from datetime import datetime
+
+    svc = PaperImportService(FakeDocs(), transport=_ok_transport())
+    task = svc.submit({"pdf_url": GOOD_URL, "source_id": "x"})
+    iso = task.as_dict()["created_at_iso"]
+    assert isinstance(iso, str) and iso
+    parsed = datetime.fromisoformat(iso)
+    assert parsed.tzinfo is not None          # 必须带时区（naive 时间会被前端按本地时区误读）

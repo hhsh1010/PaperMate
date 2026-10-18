@@ -8,6 +8,7 @@ import {
   mergeTasks,
   taskStatusText,
 } from "../lib/paperSearch";
+import { timeAgo } from "../lib/time";
 
 /**
  * 导入任务的轮询与操作（放在 hook 里，文献页只管渲染）。
@@ -160,6 +161,11 @@ export function PaperImportQueue({
                   <div className="paper-queue-title">{t.title || t.source_id || t.id}</div>
                   <div className={`paper-queue-status${t.status === "failed" ? " bad" : ""}${t.status === "ready" ? " ok" : ""}`}>
                     {text}
+                    {t.created_at_iso && (
+                      <span className="paper-queue-at" title={new Date(t.created_at_iso).toLocaleString()}>
+                        {` · ${timeAgo(t.created_at_iso)}发起`}
+                      </span>
+                    )}
                   </div>
                   {pct != null && (
                     <div className="paper-bar" aria-hidden="true">

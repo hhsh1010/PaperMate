@@ -6,6 +6,7 @@ import { PaperImportQueue, usePaperImportTasks } from "../components/PaperImport
 import { SearchPaperDrawer } from "../components/SearchPaperDrawer";
 import { Icons } from "../lib/icons";
 import { toErrorMessage } from "../lib/error";
+import { timeAgo } from "../lib/time";
 
 /** 上传进度轮询上限（700ms × 300 ≈ 3.5 分钟）——J8 修复：后端卡在非终态时不再无限轮询。 */
 const POLL_MAX_ATTEMPTS = 300;
@@ -827,7 +828,14 @@ export function DocumentsPage({
                       aria-label={`选择 ${d.filename}`}
                     />
                   </label>
-                  <span className="doc-table-name" title={d.filename}>{d.filename}</span>
+                  <span className="doc-table-name" title={d.filename}>
+                    <span className="doc-table-name-text">{d.filename}</span>
+                    {d.created_at && (
+                      <span className="doc-table-time" title={new Date(d.created_at).toLocaleString()}>
+                        {timeAgo(d.created_at)}
+                      </span>
+                    )}
+                  </span>
                   {(() => {
                     const prog = progressMap[d.id];
                     const uploadingNow =

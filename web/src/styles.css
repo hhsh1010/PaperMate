@@ -6971,3 +6971,9 @@ input, select, textarea { font-family: inherit; }
 .doc-switch-btn:hover:not(:disabled) { background: var(--surface-2); border-color: var(--border-strong); }
 .doc-switch-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .doc-switch-pos { font-size: 12px; color: var(--muted); min-width: 54px; text-align: center; font-variant-numeric: tabular-nums; }
+
+/* 时间戳（用户要求：能显示时间的地方尽量显示）—— 相对时间 + 悬停看完整时间 */
+.doc-table-name { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.doc-table-name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.doc-table-time { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.paper-queue-at { color: var(--muted); }

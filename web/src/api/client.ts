@@ -950,4 +950,5 @@ export type PaperImportTaskDto = {
   doc_id: number | null;
   duplicate: boolean;
   error: string;
+  created_at_iso: string;
 };

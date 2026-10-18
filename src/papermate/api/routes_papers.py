@@ -102,6 +102,7 @@ class ImportTaskOut(BaseModel):
     doc_id: int | None = None
     duplicate: bool = False
     error: str = ""
+    created_at_iso: str = ""
 
 
 class ImportCreatedOut(BaseModel):
