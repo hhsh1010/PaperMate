@@ -7,6 +7,8 @@ import {
   TOP_CATEGORIES,
   appendHits,
   buildImportPayload,
+  canLoadMore,
+  capHint,
   chineseHint,
   parseSearchHistory,
   pushSearchHistory,
@@ -332,10 +334,14 @@ export function SearchPaperDrawer({
                 ? `共 ${total.toLocaleString()} 条 · 已显示 ${hits.length} 条`
                 : `已显示 ${hits.length} 条`}
             </span>
-            {hasMore && (
+            {canLoadMore(hits.length, hasMore) ? (
               <button className="ghost-btn" onClick={() => void loadMore()} disabled={loadingMore}>
                 {loadingMore ? "加载中…" : "加载更多"}
               </button>
+            ) : (
+              capHint(hits.length, total) && (
+                <span className="paper-more-cap">{capHint(hits.length, total)}</span>
+              )
             )}
           </div>
         )}

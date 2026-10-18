@@ -154,6 +154,13 @@ async def search_papers(request: Request, q: str = "", limit: int = 10,
     query = (q or "").strip()
     if not query:
         raise HTTPException(status_code=400, detail="检索关键词不能为空")
+    # ★ 防越界：arXiv 的深层分页很慢、位置太深还会直接报错 ⇒ 在入口就挡掉
+    #   （前端上限是 100 条，这里留足余量 500，不做成"正常使用会撞到"的限制）
+    if max(0, int(start)) + max(1, int(limit)) > 500:
+        raise HTTPException(
+            status_code=400,
+            detail="翻得太深了（最多取前 500 条）；建议收窄关键词或用分类筛选",
+        )
     if (scope or "all").strip().lower() not in SCOPES:
         raise HTTPException(status_code=400,
                             detail=f"不支持的检索范围：{scope}（可选：{'/'.join(SCOPES)}）")

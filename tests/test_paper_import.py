@@ -573,3 +573,23 @@ async def test_task_exposes_iso_timestamp() -> None:
     assert isinstance(iso, str) and iso
     parsed = datetime.fromisoformat(iso)
     assert parsed.tzinfo is not None          # 必须带时区（naive 时间会被前端按本地时区误读）
+
+
+def test_search_deep_start_rejected(client, monkeypatch) -> None:
+    """★ 深层分页在**入口**就挡掉（arXiv 位置太深会报错，别让请求打过去才炸）。"""
+    monkeypatch.setenv("PAPERMATE_ENABLE_PAPER_SEARCH", "1")
+    r = client.get("/api/v1/papers/search", params={"q": "rag", "start": 480, "limit": 50})
+    assert r.status_code == 400
+    assert "最多取前 500 条" in r.json()["detail"]
+
+
+def test_search_normal_start_allowed(client, monkeypatch) -> None:
+    """正常翻页（前端上限 100）不该撞到这道保护。"""
+    monkeypatch.setenv("PAPERMATE_ENABLE_PAPER_SEARCH", "1")
+
+    class FakeSearch:
+        async def search(self, q, *, limit=10, start=0, sort="relevance", scope="all", categories=()):
+            return []
+
+    client.app.state.paper_search = FakeSearch()
+    assert client.get("/api/v1/papers/search", params={"q": "rag", "start": 80, "limit": 20}).status_code == 200

@@ -218,3 +218,32 @@ export function appendHits<T extends { source_id: string }>(prev: T[], incoming:
   const seen = new Set(prev.map((h) => h.source_id));
   return [...prev, ...incoming.filter((h) => !seen.has(h.source_id))];
 }
+
+/**
+ * 单次检索**最多展示**多少条。
+ *
+ * 为什么要有上限：arXiv 的 `start` 深层分页很慢、位置太深还可能直接报错；
+ * 而且真到了 100 条，用户基本也该收窄关键词了（继续翻只是"看得更多、用得更少"）。
+ */
+export const MAX_HITS = 100;
+
+/** 是否还能「加载更多」：没有更多 / 已到上限 ⇒ false。 */
+export function canLoadMore(
+  shown: number,
+  hasMore: boolean,
+  max: number = MAX_HITS,
+): boolean {
+  return hasMore && shown < max;
+}
+
+/**
+ * 到上限时的一句提示（没到上限返回空串，调用方据此决定要不要渲染）。
+ * 不说"没了"，而是给**下一步动作**：收窄关键词 / 用分类筛选。
+ */
+export function capHint(shown: number, total: number, max: number = MAX_HITS): string {
+  if (shown < max) return "";
+  if (total > shown) {
+    return `已显示前 ${max} 条（共 ${total.toLocaleString()} 条）— 结果太多，建议收窄关键词或用分类筛选`;
+  }
+  return "";
+}

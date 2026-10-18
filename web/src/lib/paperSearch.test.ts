@@ -10,6 +10,8 @@ import { describe, expect, it } from 'vitest';
 import {
   activeTaskCount,
   appendHits,
+  canLoadMore,
+  capHint,
   buildImportPayload,
   chineseHint,
   downloadPct,
@@ -208,5 +210,27 @@ describe('加载更多（追加去重）', () => {
   it('空输入不炸', () => {
     expect(appendHits([], [])).toEqual([]);
     expect(appendHits([{ source_id: 'a' }], [])).toHaveLength(1);
+  });
+});
+
+describe('加载更多的上限（方案 B）', () => {
+  it('没到上限且还有更多 ⇒ 能加载', () => {
+    expect(canLoadMore(20, true)).toBe(true);
+    expect(canLoadMore(99, true)).toBe(true);
+  });
+
+  it('到上限 / 没有更多 ⇒ 不能加载', () => {
+    expect(canLoadMore(100, true)).toBe(false);   // 到顶
+    expect(canLoadMore(120, true)).toBe(false);   // 防御：越界也算到顶
+    expect(canLoadMore(20, false)).toBe(false);   // arXiv 说没有更多了
+  });
+
+  it('到顶提示：只在"确实还有更多没显示"时给，并给下一步动作', () => {
+    expect(capHint(20, 5000)).toBe('');            // 没到顶 ⇒ 不提示
+    const hint = capHint(100, 4821);
+    expect(hint).toContain('100');
+    expect(hint).toContain('4,821');
+    expect(hint).toContain('收窄关键词');            // 不只说"没了"，要给动作
+    expect(capHint(100, 100)).toBe('');            // 正好显示完 ⇒ 不需要提示
   });
 });
