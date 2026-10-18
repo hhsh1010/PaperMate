@@ -28,10 +28,19 @@ _state: dict | None = None
 # 消除 runtime_settings(_default_state/public_view) / chat_service.build_agent / routes_search 的多处拷贝。
 # 新增开关只需在此加一键，其余 3 处自动继承；用 dict(...) 拷贝避免被运行时 update 反向改写常量。
 # - reproduction   : S8 复现检索（/复现 命令技能，抽取超参 + LLM 三态复现清单；受 SkillRouter 门控）
+def _env_flag(name: str) -> bool:
+    """读环境变量形式的布尔开关（默认关）。"""
+    import os
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
 DEFAULT_FEATURES: dict = {
     "memory": True, "summary": True, "multi_query": False,
     "code_interpreter": False, "skills": True,
     "planning": True, "dev_eval": False, "thinking": False,
+    # 论文在线检索/导入（阶段 3）：**默认关**，因为它是主动联网能力。
+    # 初始种子读环境变量（与 default_embedder 同一范式：只是首次种子，之后以状态文件为准）。
+    "paper_search": _env_flag("PAPERMATE_ENABLE_PAPER_SEARCH"),
     "verify_reply": False, "diagram_enrich": False,
     # 失败轮次自评（2026-09-16 首次接线 Reflector）：**只在循环中止路径**（迭代耗尽/连续无进展）
     # 自评一次，若判 NEEDS_IMPROVEMENT 则带建议重生成一次。那一轮本来就要失败，

@@ -321,7 +321,22 @@ class PaperImportService:
 def paper_import_enabled() -> bool:
     """论文搜索/导入的**全局开关**（默认关 —— 网络功能必须显式开启）。
 
-    ★ 为什么用环境变量而不是设置页：论文检索与"会话级联网"不是一回事（它不属于任何会话）；
-    设置页开关留到阶段 3 与前端一起做，本轮先把"默认关闭"这条安全默认落地。
+    判定口径：**运行时设置 OR 环境变量**，任一为真即开启。
+    - 运行时设置：`features.paper_search`（设置页可切，状态文件持久化）；
+    - 环境变量：`PAPERMATE_ENABLE_PAPER_SEARCH`（运维/CI 用，免开发设置页）。
+
+    ★ 为什么是 OR 而不是"设置优先"：环境变量是**显式的运维动作**（"我就是要开"），
+      若被一个默认 false 的设置覆盖，就会出现"设了 env 却不生效"的死配置（本项目踩过）。
+      代价是"设置页关不掉 env 打开的功能" —— 已在文档写明：**关闭需两者都关**。
     """
-    return os.environ.get("PAPERMATE_ENABLE_PAPER_SEARCH", "").strip().lower() in ("1", "true", "yes", "on")
+    if os.environ.get("PAPERMATE_ENABLE_PAPER_SEARCH", "").strip().lower() in ("1", "true", "yes", "on"):
+        return True
+    try:
+        from .. import runtime_settings  # 延迟导入，避免模块级循环依赖
+    except Exception:  # noqa: BLE001
+        return False
+    try:
+        feat = runtime_settings.get_state().get("features", {}) or {}
+        return bool(feat.get("paper_search", False))
+    except Exception:  # noqa: BLE001  读设置失败按"关闭"处理（网络功能的安全默认）
+        return False

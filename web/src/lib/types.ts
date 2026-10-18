@@ -714,6 +714,7 @@ export interface AppSettings {
     planning: boolean;
     dev_eval: boolean;
     thinking: boolean;
+    paper_search: boolean;
     /**
      * P1-2.1 回复逐条核验。**L1（引用↔页码确定性比对）自 2026-09-16 起常开**，
      * 本开关只控制 L2（+1 次 LLM 语义核验）。只标存疑、不自动改写回复。

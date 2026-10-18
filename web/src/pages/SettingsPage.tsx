@@ -52,6 +52,7 @@ const FEATURES_DEF = [
   { key: "featReflectOnAbort", group: "chat", label: "失败轮次自评", hint: "只在「迭代耗尽 / 连续无进展」这类**失败轮次**触发：先做一次自评（限 max_tokens 400、超时 15s；超时或异常一律沿用原兜底内容），若判定「需改进」则带该建议重新收尾一次（仍不给工具，保证收敛）。**正常收敛的对话零额外调用**；自评超时或异常一律沿用原兜底内容，不影响回答。" },
   { key: "featPromptEnhance", group: "writing", label: "提示词增强", hint: "输入框「增强」按钮：把口语需求改写为更明确的任务描述（单轮元任务，按会话/全局当前模型调用）。关闭后接口返回 403（API 保留）；fake 模型下自动提示不增强。" },
   { key: "featSummary", group: "chat", label: "一键总结", hint: "对话页右栏文档面板的「结构化总结 / 相关工作 / 对比」入口；关闭后接口返回 403（API 保留）。" },
+  { key: "featPaperSearch", group: "doc", label: "论文在线检索（arXiv）", hint: "文献页右上「检索论文」入口：检索 arXiv 元数据并导入解析（只拿元数据，导入才下载全文）。**默认关闭** —— 这是主动联网能力。若同时设了环境变量 PAPERMATE_ENABLE_PAPER_SEARCH，则需两者都关才真正关闭。" },
   { key: "featDiagramEnrich", group: "doc", label: "结构图识别（多模态）", hint: "上传 PDF 时用 DeepSeek-V4-Flash-Vision 把矢量结构图（架构图/流程图/框图）还原为 Mermaid 源码 + 一句话描述；需先在「模型连接」配置并测试 DeepSeek 密钥，无 key/失败自动降级为空，不影响上传。" },
   { key: "featParaTransform", group: "writing", label: "段落 AI 改写（改稿工作台）", hint: "改稿工作台选中段落后的扩写/缩写/润色/去重：单轮 LLM 改写生成候选文本，采用即写入文档（track-changes + 自动备份，可撤销）；fake 模型下返回原文不臆造。关闭后接口返回 403（API 保留）。" },
   { key: "featSkills", group: "skill", label: "技能总开关", hint: "所有命令技能的统一门控；关闭后 / 命令一律回落普通对话。" },
@@ -181,6 +182,7 @@ export function SettingsPage() {
   const [featPlanning, setFeatPlanning] = useState(true);
   const [featDevEval, setFeatDevEval] = useState(false);
   const [featThinking, setFeatThinking] = useState(false);
+  const [featPaperSearch, setFeatPaperSearch] = useState(false);
   const [featVerifyReply, setFeatVerifyReply] = useState(false);
   const [featReflectOnAbort, setFeatReflectOnAbort] = useState(false);
   const [featPromptEnhance, setFeatPromptEnhance] = useState(true);
@@ -290,6 +292,7 @@ export function SettingsPage() {
     setFeatPlanning(settings.features?.planning !== false);
     setFeatDevEval(settings.features?.dev_eval === true);
     setFeatThinking(settings.features?.thinking === true);
+    setFeatPaperSearch(settings.features?.paper_search === true);
     setFeatVerifyReply(settings.features?.verify_reply === true);
     setFeatReflectOnAbort(settings.features?.reflect_on_abort === true);
     setFeatDiagramEnrich(settings.features?.diagram_enrich === true);
@@ -518,6 +521,7 @@ export function SettingsPage() {
         planning: featPlanning,
         dev_eval: featDevEval,
         thinking: featThinking,
+        paper_search: featPaperSearch,
         verify_reply: featVerifyReply,
         reflect_on_abort: featReflectOnAbort,
         prompt_enhance: featPromptEnhance,
@@ -699,6 +703,7 @@ export function SettingsPage() {
     featMemory: setFeatMemory, featSummary: setFeatSummary, featMultiQuery: setFeatMultiQuery,
     featCodeInterpreter: setFeatCodeInterpreter, featSkills: setFeatSkills,
     featPlanning: setFeatPlanning, featDevEval: setFeatDevEval, featThinking: setFeatThinking,
+      featPaperSearch: setFeatPaperSearch,
     featVerifyReply: setFeatVerifyReply, featDiagramEnrich: setFeatDiagramEnrich,
     featReflectOnAbort: setFeatReflectOnAbort,
     featPromptEnhance: setFeatPromptEnhance, featParaTransform: setFeatParaTransform,

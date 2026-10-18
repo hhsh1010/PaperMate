@@ -63,6 +63,7 @@ def test_features_default_on(client):
         "revision": True,  # /改稿（默认开）
         "prompt_enhance": True,  # 提示词增强（默认开）
         "para_transform": True,  # 段落 AI 改写（工作台，默认开）
+        "paper_search": False,  # 论文在线检索（阶段 3，默认关：主动联网）
     }
 
 
@@ -92,6 +93,7 @@ def test_put_features_persisted(client):
         "revision": True,
         "prompt_enhance": True,
         "para_transform": True,
+        "paper_search": False,  # 论文在线检索（阶段 3，默认关：主动联网）
     }
     g = client.get("/api/v1/settings").json()
     assert g["features"]["memory"] is False

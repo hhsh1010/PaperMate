@@ -397,3 +397,45 @@ def test_search_passes_scope_and_categories(client, monkeypatch) -> None:
                    params={"q": "rag", "scope": "ti", "categories": "cs.CL,cs.IR"})
     assert r.status_code == 200
     assert got == {"q": "rag", "scope": "ti", "categories": ("cs.CL", "cs.IR")}
+
+
+def test_gate_reads_runtime_settings(monkeypatch) -> None:
+    """★ 设置页开关（features.paper_search）也能开启 —— 不只有环境变量一条路。
+
+    判定口径是 **OR**：任一为真即开；关闭需两者都关（已在 docstring 写明）。
+    """
+    from papermate import runtime_settings
+    from papermate.services import paper_import as mod
+
+    monkeypatch.delenv("PAPERMATE_ENABLE_PAPER_SEARCH", raising=False)
+    st = runtime_settings.get_state()
+    old = st["features"].get("paper_search")
+    try:
+        st["features"]["paper_search"] = True
+        assert mod.paper_import_enabled() is True
+        st["features"]["paper_search"] = False
+        assert mod.paper_import_enabled() is False
+        # env 优先级：即使设置为关，env 仍能开（显式运维动作）
+        monkeypatch.setenv("PAPERMATE_ENABLE_PAPER_SEARCH", "1")
+        assert mod.paper_import_enabled() is True
+    finally:
+        st["features"]["paper_search"] = bool(old)
+
+
+def test_settings_toggle_end_to_end(client, monkeypatch) -> None:
+    """端到端：通过设置接口打开开关 ⇒ 检索接口从 403 变为 200（不需要环境变量）。"""
+    monkeypatch.delenv("PAPERMATE_ENABLE_PAPER_SEARCH", raising=False)
+    assert client.get("/api/v1/papers/search", params={"q": "rag"}).status_code == 403
+
+    class FakeSearch:
+        async def search(self, q, *, limit=10, start=0, sort="relevance", scope="all", categories=()):
+            return []
+
+    client.app.state.paper_search = FakeSearch()
+    r = client.put("/api/v1/settings", json={"features": {"paper_search": True}})
+    assert r.status_code in (200, 201), r.text
+    # 设置改的是内存态 + 落盘；同一进程内立即可见
+    r2 = client.get("/api/v1/papers/search", params={"q": "rag"})
+    assert r2.status_code == 200, r2.text
+    # 收尾：关回去，避免影响同进程的其它用例
+    client.put("/api/v1/settings", json={"features": {"paper_search": False}})

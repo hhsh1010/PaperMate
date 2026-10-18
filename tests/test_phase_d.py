@@ -346,6 +346,7 @@ def test_runtime_settings_default_7keys_and_cost_limit():
         "revision": True,  # 改稿（/改稿，对照参考文献逐节给修改建议，默认开）
         "prompt_enhance": True,  # 提示词增强（输入框改写为更明确任务描述，默认开）
         "para_transform": True,  # 段落 AI 改写（工作台扩写/缩写/润色/去重，默认开）
+        "paper_search": False,  # 论文在线检索（阶段 3，默认关：主动联网）
     }
     assert base["cost_limit_per_turn"] == 1.0
     # token 上限（2026-09-17 拆成两项，口径不同）：
