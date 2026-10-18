@@ -247,3 +247,17 @@ export function capHint(shown: number, total: number, max: number = MAX_HITS): s
   }
   return "";
 }
+
+/**
+ * 翻译是否**完全覆盖**了整个查询。
+ *
+ * 只在"一个术语 + 结果恰好等于实际查询"时为 true —— 此时再显示「实际检索：xxx」
+ * 就是把同一个字符串**重复显示两遍**（用户截图里正是这样）。部分命中/多个术语时仍要显示。
+ */
+export function isFullyMapped(
+  translations: { zh: string; en: string }[],
+  queryUsed: string,
+): boolean {
+  if (translations.length !== 1) return false;
+  return (queryUsed || "").trim() === translations[0].en.trim();
+}

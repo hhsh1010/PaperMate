@@ -9,6 +9,7 @@ import {
   buildImportPayload,
   canLoadMore,
   capHint,
+  isFullyMapped,
   chineseHint,
   parseSearchHistory,
   pushSearchHistory,
@@ -323,9 +324,23 @@ export function SearchPaperDrawer({
         )}
 
         {translated.length > 0 && (
-          <div className="paper-warn">
-            已自动换成英文关键词：{translated.map((x) => `「${x.zh}」→ ${x.en}`).join("；")}
-            <span className="paper-used">实际查询：{used}</span>
+          <div className="paper-zh-map">
+            <div className="paper-zh-map-label">已自动换成英文关键词</div>
+            <ul className="paper-zh-map-list">
+              {translated.map((x) => (
+                <li key={x.zh}>
+                  <span className="paper-zh-zh">{x.zh}</span>
+                  <span className="paper-zh-arrow" aria-hidden="true">
+                    →
+                  </span>
+                  <span className="paper-zh-en">{x.en}</span>
+                </li>
+              ))}
+            </ul>
+            {/* 翻译"完全覆盖"查询时不重复显示同一个串（截图里的冗余正是这个） */}
+            {!isFullyMapped(translated, used) && (
+              <div className="paper-zh-used">实际检索：{used}</div>
+            )}
           </div>
         )}
         {hint && translated.length === 0 && <div className="paper-warn">{hint}</div>}

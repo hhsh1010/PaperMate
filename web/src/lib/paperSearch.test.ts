@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest';
 import {
   activeTaskCount,
   appendHits,
+  isFullyMapped,
   canLoadMore,
   capHint,
   buildImportPayload,
@@ -232,5 +233,21 @@ describe('加载更多的上限（方案 B）', () => {
     expect(hint).toContain('4,821');
     expect(hint).toContain('收窄关键词');            // 不只说"没了"，要给动作
     expect(capHint(100, 100)).toBe('');            // 正好显示完 ⇒ 不需要提示
+  });
+});
+
+describe('术语映射提示的排版判断', () => {
+  const t1 = [{ zh: '目标检测', en: 'object detection' }];
+  it('单个术语且正好等于实际查询 ⇒ 完全覆盖（不必再显示"实际检索"）', () => {
+    expect(isFullyMapped(t1, 'object detection')).toBe(true);
+    expect(isFullyMapped(t1, ' object detection ')).toBe(true);   // 首尾空白不算差异
+  });
+  it('多个术语 / 只部分命中 ⇒ 仍需显示实际查询', () => {
+    expect(isFullyMapped([{ zh: '大模型', en: 'large language model' }, { zh: '微调', en: 'fine-tuning' }],
+      'large language model fine-tuning')).toBe(false);
+    expect(isFullyMapped(t1, 'object detection survey')).toBe(false);
+  });
+  it('没有翻译 ⇒ false（不该走这个分支）', () => {
+    expect(isFullyMapped([], 'x')).toBe(false);
   });
 });
