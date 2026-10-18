@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { api } from "../api/client";
 import type { CollectionOut, DocumentOut, SummaryOut, UploadProgress } from "../lib/types";
 import { ConfirmModal } from "../components/ConfirmModal";
+import { PaperImportQueue, usePaperImportTasks } from "../components/PaperImportQueue";
+import { SearchPaperDrawer } from "../components/SearchPaperDrawer";
 import { Icons } from "../lib/icons";
 import { toErrorMessage } from "../lib/error";
 
@@ -527,6 +529,10 @@ export function DocumentsPage({
     }
   }, [wsNameOpen, wsName, onCreateWorkspace, onCreateWorkspaceFromCollection]);
 
+
+    // 论文在线检索（阶段 3）：任务状态与轮询都在 hook 里，本页只负责渲染
+    const [paperOpen, setPaperOpen] = useState(false);
+    const paperImport = usePaperImportTasks();
   return (
     <div className="doc-library-page">
       <header className="usage-header page-head-row">
@@ -535,6 +541,9 @@ export function DocumentsPage({
           <p className="muted">管理你的论文库 · 共 {docs.length} 篇文献</p>
         </div>
         <div className="page-header-actions">
+            <button className="ghost-btn" onClick={() => setPaperOpen(true)}>
+              检索论文
+            </button>
           <label className="upload-btn primary">
             <Icons.upload size={15} />
           上传文档
@@ -576,6 +585,27 @@ export function DocumentsPage({
           </button>
         </div>
       </header>
+
+        <PaperImportQueue
+          tasks={paperImport.tasks}
+          docProg={paperImport.docProg}
+          onCancel={(id) => void paperImport.cancel(id)}
+          onRetry={(t) => void paperImport.retry(t)}
+          onOpenDoc={(docId) => {
+            void onAddToSession?.([docId]);
+            void refresh();
+          }}
+          onDismiss={paperImport.dismiss}
+        />
+
+        <SearchPaperDrawer
+          open={paperOpen}
+          onClose={() => setPaperOpen(false)}
+          onSubmitted={(tasks) => {
+            paperImport.add(tasks);
+            void refresh();
+          }}
+        />
 
       {/* F5：文献集（Collections）——按课题/项目分组组织文档，可一键「研读」整个课题。
           放在左栏并自带滚动：新建条目不会把右侧文献表整体推下去（此前「新建后下方不可见」的根因）。 */}

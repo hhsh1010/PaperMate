@@ -77,6 +77,7 @@ class ImportRequestIn(BaseModel):
 class ImportTaskOut(BaseModel):
     id: str
     status: str
+    pdf_url: str = ""
     source: str
     source_id: str
     version: str

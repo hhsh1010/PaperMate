@@ -317,6 +317,45 @@ export const api = {
     return json(await fetch(`${BASE}/documents`));
   },
 
+  // ---------- 论文在线检索与导入（阶段 3） ----------
+  async searchPapers(p: {
+    q: string;
+    limit?: number;
+    start?: number;
+    sort?: "relevance" | "submitted";
+    scope?: string;
+    categories?: string;
+  }): Promise<{ query: string; items: PaperHitDto[] }> {
+    const qs = new URLSearchParams();
+    qs.set("q", p.q);
+    if (p.limit != null) qs.set("limit", String(p.limit));
+    if (p.start != null) qs.set("start", String(p.start));
+    if (p.sort) qs.set("sort", p.sort);
+    if (p.scope) qs.set("scope", p.scope);
+    if (p.categories) qs.set("categories", p.categories);
+    return json(await fetch(`${BASE}/papers/search?${qs.toString()}`));
+  },
+
+  async importPapers(items: PaperImportItemDto[]): Promise<{ tasks: PaperImportTaskDto[] }> {
+    return json(
+      await fetch(`${BASE}/papers/import`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items }),
+      }),
+    );
+  },
+
+  async getPaperImportTask(id: string): Promise<PaperImportTaskDto> {
+    return json(await fetch(`${BASE}/papers/import/${encodeURIComponent(id)}`));
+  },
+
+  async cancelPaperImportTask(id: string): Promise<{ ok: boolean; cancelled: boolean }> {
+    return json(
+      await fetch(`${BASE}/papers/import/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
+    );
+  },
+
   // ---------- F5：文献集（Collections） ----------
   async listCollections(): Promise<{ items: CollectionOut[] }> {
     return json(await fetch(`${BASE}/collections`));
@@ -858,4 +897,46 @@ export const api = {
     if (!res.ok) throw new ApiError(res.status, "导出评测样本失败");
     return await res.text();
   },
+};
+
+// ---------- 论文检索（阶段 3）DTO：与 routes_papers.py 出参一一对应 ----------
+export type PaperHitDto = {
+  source: string;
+  source_id: string;
+  version: string;
+  title: string;
+  abstract: string;
+  authors: string[];
+  published: string;
+  updated: string;
+  pdf_url: string;
+  abs_url: string;
+  categories: string[];
+  primary_category: string;
+  comment: string;
+  doi: string;
+};
+
+export type PaperImportItemDto = {
+  pdf_url: string;
+  source?: string;
+  source_id?: string;
+  version?: string;
+  title?: string;
+};
+
+export type PaperImportTaskDto = {
+  id: string;
+  status: string;
+  pdf_url: string;
+  source: string;
+  source_id: string;
+  version: string;
+  title: string;
+  filename: string;
+  downloaded: number;
+  total: number;
+  doc_id: number | null;
+  duplicate: boolean;
+  error: string;
 };

@@ -106,6 +106,7 @@ class ImportTask:
         return {
             "id": self.id,
             "status": self.status,
+            "pdf_url": self.url,
             "source": self.source,
             "source_id": self.source_id,
             "version": self.version,
