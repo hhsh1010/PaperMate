@@ -146,6 +146,111 @@ def build_query(q: str, *, scope: str = "all", categories: tuple[str, ...] = ())
     return core
 
 
+#: ★ 中→英**短语级**术语表（不是逐字翻译）
+#
+# 为什么要它：arXiv 是英文库，中文关键词几乎必 0 命中（实测「深度学习」= 0 条）。
+# 但**逐字翻译更糟** —— "大模型微调" 直译成 "large model fine-tuning" 不通，
+# 正确说法是 "LLM fine-tuning"。所以这里只收**成句成词的高频术语**，做最长匹配替换；
+# 未命中的部分保持原样，由调用方提示用户改用英文（**不替用户猜**）。
+#
+# 覆盖范围刻意保守：宁可不翻译，也不要产出"半通不通"的查询。
+ZH_TERMS: dict[str, str] = {
+    "检索增强生成": "retrieval augmented generation",
+    "人类反馈强化学习": "reinforcement learning from human feedback",
+    "提示词工程": "prompt engineering",
+    "知识蒸馏": "knowledge distillation",
+    "自监督学习": "self-supervised learning",
+    "半监督学习": "semi-supervised learning",
+    "无监督学习": "unsupervised learning",
+    "对比学习": "contrastive learning",
+    "迁移学习": "transfer learning",
+    "强化学习": "reinforcement learning",
+    "监督学习": "supervised learning",
+    "深度学习": "deep learning",
+    "机器学习": "machine learning",
+    "少样本学习": "few-shot learning",
+    "零样本学习": "zero-shot learning",
+    "上下文学习": "in-context learning",
+    "大语言模型": "large language model",
+    "大型语言模型": "large language model",
+    "语言模型": "language model",
+    "大模型": "large language model",
+    "多模态大模型": "multimodal large language model",
+    "多智能体": "multi-agent",
+    "智能体": "agent",
+    "注意力机制": "attention mechanism",
+    "多头注意力": "multi-head attention",
+    "自注意力": "self-attention",
+    "知识图谱": "knowledge graph",
+    "思维链": "chain of thought",
+    "推理链": "reasoning chain",
+    "工具调用": "tool use",
+    "函数调用": "function calling",
+    "语义检索": "semantic retrieval",
+    "向量检索": "vector retrieval",
+    "稠密检索": "dense retrieval",
+    "稀疏检索": "sparse retrieval",
+    "混合检索": "hybrid retrieval",
+    "检索增强": "retrieval augmentation",
+    "向量数据库": "vector database",
+    "向量化": "embedding",
+    "嵌入": "embedding",
+    "重排序": "reranking",
+    "重排": "reranking",
+    "微调": "fine-tuning",
+    "提示词": "prompt",
+    "提示工程": "prompt engineering",
+    "多模态": "multimodal",
+    "视觉问答": "visual question answering",
+    "目标检测": "object detection",
+    "语义分割": "semantic segmentation",
+    "图像分割": "image segmentation",
+    "文本分类": "text classification",
+    "命名实体识别": "named entity recognition",
+    "信息抽取": "information extraction",
+    "机器翻译": "machine translation",
+    "文本摘要": "text summarization",
+    "问答系统": "question answering",
+    "幻觉": "hallucination",
+    "对齐": "alignment",
+    "基准测试": "benchmark",
+    "评估指标": "evaluation metric",
+    "检索器": "retriever",
+    "生成器": "generator",
+}
+
+_HAN_RE = re.compile(r"[\u4e00-\u9fa5]")
+
+
+def has_han(text: str) -> bool:
+    """是否还含汉字（用于提示用户"没翻干净"）。"""
+    return bool(_HAN_RE.search(text or ""))
+
+
+def translate_zh_query(text: str) -> tuple[str, tuple[tuple[str, str], ...]]:
+    """把中文关键词里的**已知术语**换成英文短语。
+
+    返回 ``(新查询, 命中的 (中文, 英文) 列表)``。
+
+    三条原则：
+    1. **最长优先**：先替换长短语（「检索增强生成」不会被「检索增强」截断）；
+    2. **只替换认识的**：剩下的中文保持原样，绝不逐字硬翻（会产出不通的查询）；
+    3. ★ **不隐瞒**：调用方必须把替换列表返回给用户并在界面明示 ——
+       悄悄换词的后果是"用户以为搜的是中文、结果莫名其妙"。
+    """
+    src = (text or "").strip()
+    if not src or not has_han(src):
+        return src, ()
+    out = src
+    applied: list[tuple[str, str]] = []
+    for zh, en in sorted(ZH_TERMS.items(), key=lambda kv: -len(kv[0])):
+        if zh in out:
+            out = out.replace(zh, f" {en} ")
+            applied.append((zh, en))
+    out = re.sub(r"\s+", " ", out).strip()
+    return out, tuple(applied)
+
+
 def split_arxiv_id(raw: str) -> tuple[str, str]:
     """从 `http://arxiv.org/abs/2401.00001v2` 或 `2401.00001v2` 拆出 (id, version)。
 

@@ -38,9 +38,11 @@ from papermate.services.paper_search import (
     ArxivClient,
     PaperSearchError,
     build_query,
+    has_han,
     normalize_categories,
     parse_arxiv_feed,
     split_arxiv_id,
+    translate_zh_query,
 )
 
 FIXTURE = pathlib.Path(__file__).parent / "fixtures" / "arxiv_search_sample.xml"
@@ -308,3 +310,41 @@ async def test_search_sends_built_query() -> None:
 
     await _client(handler).search("machine learning", scope="ti", categories=("cs.CL",))
     assert seen["q"] == '(ti:"machine learning") AND (cat:cs.CL)'
+
+
+# ------------------------------------------------------------------ 中文术语映射
+
+def test_translate_phrase_level() -> None:
+    out, applied = translate_zh_query("检索增强生成")
+    assert out == "retrieval augmented generation"
+    assert applied == (("检索增强生成", "retrieval augmented generation"),)
+
+
+def test_translate_longest_match_first() -> None:
+    """★ 「检索增强生成」必须整体替换，不能被较短的「检索增强」先吃掉。"""
+    out, applied = translate_zh_query("检索增强生成")
+    assert out == "retrieval augmented generation"
+    assert all(zh != "检索增强" for zh, _ in applied)
+
+
+def test_translate_multiple_terms() -> None:
+    out, applied = translate_zh_query("大模型微调")
+    assert "large language model" in out and "fine-tuning" in out
+    assert len(applied) == 2
+
+
+def test_translate_unknown_stays_untouched() -> None:
+    """未命中术语表 ⇒ **原样返回**（连同空的替换列表），绝不逐字硬翻。"""
+    out, applied = translate_zh_query("没有这个词")
+    assert out == "没有这个词"
+    assert applied == ()
+    # 半中半英（如「RAG 的评估」）也是原样 —— 但 remaining_chinese 会让前端提示改英文
+    out2, applied2 = translate_zh_query("RAG 的评估")
+    assert out2 == "RAG 的评估" and applied2 == ()
+    assert has_han(out2) is True
+
+
+def test_translate_english_untouched() -> None:
+    out, applied = translate_zh_query("retrieval augmented generation")
+    assert out == "retrieval augmented generation" and applied == ()
+

@@ -325,7 +325,13 @@ export const api = {
     sort?: "relevance" | "submitted";
     scope?: string;
     categories?: string;
-  }): Promise<{ query: string; items: PaperHitDto[] }> {
+  }): Promise<{
+    query: string;
+    query_used: string;
+    translations: { zh: string; en: string }[];
+    remaining_chinese: boolean;
+    items: PaperHitDto[];
+  }> {
     const qs = new URLSearchParams();
     qs.set("q", p.q);
     if (p.limit != null) qs.set("limit", String(p.limit));

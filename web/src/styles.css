@@ -6946,3 +6946,4 @@ input, select, textarea { font-family: inherit; }
 .paper-queue-actions { display: flex; gap: 6px; flex: 0 0 auto; }
 .paper-bar { height: 4px; background: var(--surface-4); border-radius: var(--radius-full); overflow: hidden; margin-top: 6px; }
 .paper-bar-in { height: 100%; background: var(--accent); }
+.paper-used { display: block; margin-top: 5px; color: var(--muted); font-size: 11.5px; }

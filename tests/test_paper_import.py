@@ -439,3 +439,43 @@ def test_settings_toggle_end_to_end(client, monkeypatch) -> None:
     assert r2.status_code == 200, r2.text
     # 收尾：关回去，避免影响同进程的其它用例
     client.put("/api/v1/settings", json={"features": {"paper_search": False}})
+
+
+def test_search_translates_chinese_and_reports_it(client, monkeypatch) -> None:
+    """★ 中文查询 ⇒ 后端换成英文再搜，并把替换明细**如实返回**（界面必须明示）。"""
+    monkeypatch.setenv("PAPERMATE_ENABLE_PAPER_SEARCH", "1")
+    got = {}
+
+    class FakeSearch:
+        async def search(self, q, *, limit=10, start=0, sort="relevance", scope="all", categories=()):
+            got["q"] = q
+            return []
+
+    client.app.state.paper_search = FakeSearch()
+    r = client.get("/api/v1/papers/search", params={"q": "检索增强生成"})
+    assert r.status_code == 200
+    body = r.json()
+    assert got["q"] == "retrieval augmented generation"       # 发给 arXiv 的是英文
+    assert body["query"] == "检索增强生成"                      # 原样回显
+    assert body["query_used"] == "retrieval augmented generation"
+    assert body["translations"] == [{"zh": "检索增强生成", "en": "retrieval augmented generation"}]
+    assert body["remaining_chinese"] is False
+
+
+def test_search_reports_remaining_chinese(client, monkeypatch) -> None:
+    """未命中术语表 ⇒ 原样发出去，但 remaining_chinese=true（前端据此提示改英文）。"""
+    monkeypatch.setenv("PAPERMATE_ENABLE_PAPER_SEARCH", "1")
+    got = {}
+
+    class FakeSearch:
+        async def search(self, q, *, limit=10, start=0, sort="relevance", scope="all", categories=()):
+            got["q"] = q
+            return []
+
+    client.app.state.paper_search = FakeSearch()
+    r = client.get("/api/v1/papers/search", params={"q": "RAG 的评估"})
+    assert r.status_code == 200
+    body = r.json()
+    assert got["q"] == "RAG 的评估"
+    assert body["remaining_chinese"] is True
+    assert body["translations"] == []

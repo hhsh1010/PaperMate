@@ -29,7 +29,9 @@ from ..services.paper_search import (
     SCOPES,
     ArxivClient,
     PaperSearchError,
+    has_han,
     normalize_categories,
+    translate_zh_query,
 )
 
 router = APIRouter(tags=["papers"])
@@ -57,8 +59,20 @@ class PaperHitOut(BaseModel):
     doi: str = ""
 
 
+class TranslationOut(BaseModel):
+    zh: str
+    en: str
+
+
 class PaperSearchOut(BaseModel):
+    #: 用户原样输入的查询
     query: str
+    #: 实际发给 arXiv 的查询（中文术语被替换后会与 query 不同）
+    query_used: str = ""
+    #: 做了哪些替换 —— 界面**必须**明示，不能悄悄换词
+    translations: list[TranslationOut] = Field(default_factory=list)
+    #: 替换后是否仍含汉字（true 表示"没翻干净"，前端应提示改英文）
+    remaining_chinese: bool = False
     items: list[PaperHitOut]
 
 
@@ -142,13 +156,21 @@ async def search_papers(request: Request, q: str = "", limit: int = 10,
         cats = normalize_categories(categories)
     except PaperSearchError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    # 中文关键词：把**已知术语**换成英文（最长优先），并把替换明细返回给界面
+    used, applied = translate_zh_query(query)
     try:
-        hits = await _search_svc(request).search(query, limit=limit, start=start, sort=sort,
+        hits = await _search_svc(request).search(used, limit=limit, start=start, sort=sort,
                                                  scope=scope, categories=cats)
     except PaperSearchError as e:
         # 上游不可用（超时/限流/解析失败）⇒ 502，前端可提示"稍后重试"
         raise HTTPException(status_code=502, detail=str(e)) from e
-    return PaperSearchOut(query=query, items=[PaperHitOut(**h.as_dict()) for h in hits])
+    return PaperSearchOut(
+        query=query,
+        query_used=used,
+        translations=[TranslationOut(zh=a, en=b) for a, b in applied],
+        remaining_chinese=has_han(used),
+        items=[PaperHitOut(**h.as_dict()) for h in hits],
+    )
 
 
 @router.post("/papers/import", response_model=ImportCreatedOut)

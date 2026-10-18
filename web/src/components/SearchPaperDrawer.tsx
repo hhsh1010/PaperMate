@@ -38,6 +38,9 @@ export function SearchPaperDrawer({
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
   const [searched, setSearched] = useState(false);
+  // 中文术语被替换的明细（**必须明示给用户**，不能悄悄换词）
+  const [translated, setTranslated] = useState<{ zh: string; en: string }[]>([]);
+  const [used, setUsed] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
@@ -73,6 +76,8 @@ export function SearchPaperDrawer({
         categories: [...cats].join(","),
       });
       setHits(res.items ?? []);
+      setTranslated(res.translations ?? []);
+      setUsed(res.query_used || text);
       setSelected(new Set());
       setSearched(true);
     } catch (e) {
@@ -80,6 +85,7 @@ export function SearchPaperDrawer({
       const msg = e instanceof Error ? e.message : String(e);
       setErr(msg);
       setHits([]);
+      setTranslated([]);
       setSearched(true);
     } finally {
       setLoading(false);
@@ -187,7 +193,13 @@ export function SearchPaperDrawer({
           ，也可直接写 <code>ti:</code> <code>au:</code> 前缀
         </div>
 
-        {hint && <div className="paper-warn">{hint}</div>}
+        {translated.length > 0 && (
+          <div className="paper-warn">
+            已自动换成英文关键词：{translated.map((x) => `「${x.zh}」→ ${x.en}`).join("；")}
+            <span className="paper-used">实际查询：{used}</span>
+          </div>
+        )}
+        {hint && translated.length === 0 && <div className="paper-warn">{hint}</div>}
         {err && <div className="paper-error">{err}</div>}
 
         <div className="paper-results">
