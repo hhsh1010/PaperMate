@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -60,6 +61,30 @@ STATUS_CANCELLED = "cancelled"
 
 class PaperImportError(RuntimeError):
     """导入失败（消息面向用户可读）。"""
+
+
+#: Windows 文件名非法字符（含控制字符）
+_ILLEGAL_NAME = re.compile(r'[\\/:*?"<>|\r\n\t\x00-\x1f]')
+
+
+def paper_filename(title: str, source_id: str, version: str = "", *, max_len: int = 80) -> str:
+    """用**论文原名**生成文件名（不再用 arXiv id）。
+
+    - 去掉 Windows 文件名非法字符（反斜杠、斜杠、冒号、星号、问号、引号、尖括号、竖线）与控制字符，压掉多余空白；
+    - 截断到 ``max_len`` 个**字符**（不是字节 —— 中文标题按字截才不会切坏半个字）；
+    - 标题为空则回退到 ``source_id + version``；两者都没有就用 ``paper``。
+    - ★ 文件名**只影响展示**：去重靠 `content_hash`，落盘按 ``doc_id`` 分目录 ⇒ 重名无害。
+    """
+    raw = " ".join((title or "").split())
+    # 替换成空格后**必须再压一次**：`A/B: C` → `A B  C`（双空格）看着像文件名出错
+    clean = " ".join(_ILLEGAL_NAME.sub(" ", raw).split()).strip(" .")
+    if not clean:
+        sid = (source_id or "").strip()
+        clean = f"{sid}{version}" if sid else "paper"
+        clean = " ".join(_ILLEGAL_NAME.sub(" ", clean).split()).strip(" .") or "paper"
+    if len(clean) > max_len:
+        clean = clean[:max_len].rstrip(" .")
+    return f"{clean}.pdf"
 
 
 def validate_pdf_url(url: str) -> str:
@@ -152,7 +177,11 @@ class PaperImportService:
         url = validate_pdf_url(str(hit.get("pdf_url") or ""))
         sid = str(hit.get("source_id") or "").strip()
         ver = str(hit.get("version") or "").strip()
-        filename = f"{sid or uuid.uuid4().hex[:8]}{ver}.pdf"
+        # ★ 文件名用**论文原名**（用户反馈：原来显示 arXiv id，看不出是哪篇）
+        #   标题为空才回退到 id；uuid 只作最后兜底。
+        filename = paper_filename(str(hit.get("title") or ""), sid, ver)
+        if filename == "paper.pdf" and not sid:
+            filename = f"{uuid.uuid4().hex[:8]}.pdf"
         task = ImportTask(
             id=uuid.uuid4().hex,
             url=url,

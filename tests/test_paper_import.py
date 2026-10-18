@@ -24,6 +24,7 @@ import pytest
 from papermate.services.paper_import import (
     PaperImportError,
     PaperImportService,
+    paper_filename,
     validate_pdf_url,
 )
 
@@ -193,7 +194,7 @@ async def test_happy_path_upload_and_meta_after_ready() -> None:
                        "title": "T"})
     done = await _settle(svc, task.id)
     assert done.status == "ready"
-    assert docs.uploads == [("2401.00001v1.pdf", len(PDF_BYTES))]
+    assert docs.uploads == [("T.pdf", len(PDF_BYTES))]
     # ★ meta 只在处理完成后写（ready 分支），且内容含来源信息
     assert done.doc_id in docs.metas
     paper = docs.metas[done.doc_id]["paper"]
@@ -522,3 +523,41 @@ def test_list_tasks_restores_after_switch(client, monkeypatch) -> None:
     ids = [t["id"] for t in listed.json()["tasks"]]
     assert tid in ids, "刷新/切页后应能通过列表接口找回该任务"
     assert svc is not None
+
+
+# ------------------------------------------------------------------ 文件名（用论文原名）
+
+def test_paper_filename_uses_title() -> None:
+    """★ 用户反馈：下载下来是 `2302.10473v6.pdf`，看不出是哪篇 ⇒ 改用论文原名。"""
+    assert paper_filename("Attention Is All You Need", "2302.10473", "v6") == "Attention Is All You Need.pdf"
+
+
+def test_paper_filename_strips_illegal_and_whitespace() -> None:
+    """Windows 非法字符要清掉；换行/多空格压平。"""
+    assert paper_filename('A/B: C? "D" <E> |F|', "id") == "A B C D E F.pdf"
+    assert paper_filename("  multi\n  line\t title  ", "id") == "multi line title.pdf"
+
+
+def test_paper_filename_truncates_by_chars() -> None:
+    """长标题按**字符**截断（中文才不会被切坏半个字），且不超上限。"""
+    long_zh = "检索增强生成" * 30
+    out = paper_filename(long_zh, "id", max_len=20)
+    assert out.endswith(".pdf") and len(out) == 24          # 20 字 + .pdf
+    assert out[:-4] == long_zh[:20]
+
+
+def test_paper_filename_falls_back_to_id_then_placeholder() -> None:
+    assert paper_filename("", "2302.10473", "v6") == "2302.10473v6.pdf"
+    assert paper_filename("", "") == "paper.pdf"
+    assert paper_filename("   ", "x") == "x.pdf"
+
+
+async def test_import_uses_title_as_filename() -> None:
+    """端到端：导入后文档名应是**论文标题**，不是 arXiv id。"""
+    docs = FakeDocs()
+    svc = PaperImportService(docs, transport=_ok_transport(), poll_interval_s=0.01)
+    task = svc.submit({"pdf_url": GOOD_URL, "source_id": "2401.00001", "version": "v1",
+                       "title": "FAIR-RAG: Faithful Adaptive Iterative Refinement"})
+    done = await _settle(svc, task.id)
+    assert done.status == "ready"
+    assert docs.uploads[0][0] == "FAIR-RAG Faithful Adaptive Iterative Refinement.pdf"
