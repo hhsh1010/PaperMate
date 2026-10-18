@@ -687,31 +687,30 @@ export function DocumentPreviewPanel({
               <TextDocView key={active.id} docId={active.id} />
             )}
           </div>
-          {/* 提示：未缩放滚轮/‹› 切文档；已缩放滚轮滚动浏览 + ‹› 翻页；Ctrl+滚轮始终缩放 */}
-          {fmt === "PDF" && (
-            <div className="preview-wheel-hint">
-              {zoom === 100
-                ? "滚轮切换文档 · Ctrl+滚轮缩放"
-                : "滚轮滚动浏览 · ‹ › 翻页 · Ctrl+滚轮缩放"}
-            </div>
-          )}
 
           {/* 底部操作：添加 / 导出（2026-09-07 改造）
               - 添加文档按钮从 Tab 栏移至此，与导出并列；
               - 移除文档只保留 Tab 栏的 ×（onCloseDoc 同源，已按会话 config.workspace 判定走工作间解绑）。 */}
-          {/* 文档切换（从头部移下来：原来只有一对 ‹› 图标，找不到也不会用）
-              - 带文字标签 + 「第 N / M 篇」位置，一眼知道在哪；
-              - 只有一个文档时整行不渲染。 */}
-          {docs.length > 1 && (
+          {/* 翻页（仅 PDF）：原来这里是「上一篇/下一篇」切换文档，
+              按用户要求改成本文档内翻页；切换文档仍走上方 Tab 栏。 */}
+          {fmt === "PDF" && activeTotal > 0 && (
             <div className="doc-switch">
-              <button className="doc-switch-btn" disabled={activeIndex <= 0}
-                onClick={() => activeIndex > 0 && onSwitch(docs[activeIndex - 1].id)}>
-                ‹ 上一篇
+              <button
+                className="doc-switch-btn"
+                disabled={activePage <= 1}
+                onClick={() => setPage(-1)}
+              >
+                ‹ 上一页
               </button>
-              <span className="doc-switch-pos">{Math.max(1, activeIndex + 1)} / {docs.length}</span>
-              <button className="doc-switch-btn" disabled={activeIndex < 0 || activeIndex >= docs.length - 1}
-                onClick={() => activeIndex < docs.length - 1 && onSwitch(docs[activeIndex + 1].id)}>
-                下一篇 ›
+              <span className="doc-switch-pos">
+                {activePage} / {activeTotal}
+              </span>
+              <button
+                className="doc-switch-btn"
+                disabled={activeTotal > 0 && activePage >= activeTotal}
+                onClick={() => setPage(1)}
+              >
+                下一页 ›
               </button>
             </div>
           )}
