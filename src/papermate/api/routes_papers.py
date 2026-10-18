@@ -156,7 +156,8 @@ async def search_papers(request: Request, q: str = "", limit: int = 10,
         cats = normalize_categories(categories)
     except PaperSearchError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-    # 中文关键词：把**已知术语**换成英文（最长优先），并把替换明细返回给界面
+    # ★ 术语映射**只在本接口内**发生（唯一调用点）：客户端 ArxivClient 与 build_query 都不翻译
+    #   ⇒ 其它调用方（脚本、未来的 Agent 工具）拿到的仍是原样关键词，是否翻译由调用方自己决定。
     used, applied = translate_zh_query(query)
     try:
         hits = await _search_svc(request).search(used, limit=limit, start=start, sort=sort,

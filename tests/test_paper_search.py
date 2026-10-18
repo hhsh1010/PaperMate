@@ -348,3 +348,30 @@ def test_translate_english_untouched() -> None:
     out, applied = translate_zh_query("retrieval augmented generation")
     assert out == "retrieval augmented generation" and applied == ()
 
+
+
+# ------------------------------------------------------------------ 术语映射的作用域（只在检索路由里）
+
+async def test_client_does_not_translate() -> None:
+    """术语映射只发生在论文检索路由里（routes_papers.search_papers）。
+
+    客户端本身**不翻译** —— 这样它就不会全局生效：
+    任何直接使用 ArxivClient 的调用方（脚本、未来的 Agent 工具）拿到的都是**原样关键词**，
+    是否翻译由调用方自己决定。
+    """
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["q"] = request.url.params.get("search_query")
+        return httpx.Response(200, text=_feed())
+
+    await _client(handler).search("检索增强生成")
+    assert seen["q"] == "检索增强生成", "客户端不该偷偷把中文换成英文"
+
+
+def test_build_query_does_not_translate() -> None:
+    """build_query 只负责拼范围/分类，不碰术语翻译（职责分离）。"""
+    assert build_query("检索增强生成") == "检索增强生成"
+    # 范围前缀照加，但**词本身不动**（单串不加引号；多词才会包成精确词组）
+    assert build_query("检索增强生成", scope="ti") == "ti:检索增强生成"
+    assert build_query("检索 增强", scope="ti") == 'ti:"检索 增强"'
