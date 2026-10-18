@@ -7025,3 +7025,47 @@ input, select, textarea { font-family: inherit; }
 .paper-more { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 18px 10px; border-top: 1px solid var(--border); }
 .paper-more-count { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .paper-more-cap { font-size: 11.5px; color: var(--muted); text-align: right; line-height: 1.5; }
+
+/* ---- 检索行的三个控件统一（2026-10-19）----
+   问题：原生 select 带黑边、输入框方角、按钮是胶囊且比输入框高 ⇒ 三个控件三套语言。
+   做法：同高（36px）+ 同圆角（--radius）+ 同边框（--border）+ 统一的焦点环（--accent-soft）。
+   ★ select **不关** appearance:none —— 关掉就连下拉箭头一起没了，而自绘箭头只能靠 background-image（要 hex）。 */
+.paper-search-row { align-items: center; }
+
+.paper-search-row .paper-scope {
+  height: 36px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 13px;
+}
+.paper-search-row .paper-scope:hover { border-color: var(--border-strong); }
+
+.paper-search-row .paper-input {
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13.5px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.paper-search-row .paper-input::placeholder { color: var(--muted); }
+.paper-search-row .paper-input:hover { border-color: var(--border-strong); }
+.paper-search-row .paper-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);   /* 焦点环用 accent 的淡色，不刺眼 */
+}
+
+/* 检索按钮：与两个输入控件**同高同圆角**（原来是胶囊且更高，像三套 UI） */
+.paper-search-row .btn-primary {
+  height: 36px;
+  padding: 0 18px;
+  border-radius: var(--radius);
+  font-size: 13.5px;
+  white-space: nowrap;
+}

@@ -593,3 +593,35 @@ def test_search_normal_start_allowed(client, monkeypatch) -> None:
 
     client.app.state.paper_search = FakeSearch()
     assert client.get("/api/v1/papers/search", params={"q": "rag", "start": 80, "limit": 20}).status_code == 200
+
+
+def test_search_reports_total_and_has_more(client, monkeypatch) -> None:
+    """★ `has_more` 决定前端「加载更多」按钮出不出现 —— 这里钉死。
+
+    （用户反馈"按钮没出现"，根因是**后端还是旧进程**：没有热重载，`total/has_more` 没返回。
+     这条用例保证：只要后端是新的，接口一定会如实给出这两个字段。）
+    """
+    monkeypatch.setenv("PAPERMATE_ENABLE_PAPER_SEARCH", "1")
+
+    class FakeSearch:
+        async def search_page(self, q, *, limit=10, start=0, sort="relevance", scope="all", categories=()):
+            return [], 4821          # 总数远大于已返回 ⇒ 还有更多
+
+    client.app.state.paper_search = FakeSearch()
+    body = client.get("/api/v1/papers/search", params={"q": "object detection"}).json()
+    assert body["total"] == 4821
+    assert body["has_more"] is True
+
+
+def test_search_last_page_has_no_more(client, monkeypatch) -> None:
+    """翻到最后一页 ⇒ `has_more=False`（前端该把按钮收起来）。"""
+    monkeypatch.setenv("PAPERMATE_ENABLE_PAPER_SEARCH", "1")
+
+    class FakeSearch:
+        async def search_page(self, q, *, limit=10, start=0, sort="relevance", scope="all", categories=()):
+            return [], 20
+
+    client.app.state.paper_search = FakeSearch()
+    body = client.get("/api/v1/papers/search", params={"q": "x", "start": 20, "limit": 20}).json()
+    assert body["total"] == 20
+    assert body["has_more"] is False
