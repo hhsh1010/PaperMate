@@ -207,3 +207,14 @@ export function parseSearchHistory(raw: string | null): SearchHistoryEntry[] {
     return [];
   }
 }
+
+/**
+ * 追加检索结果（按 `source_id` 去重）。
+ *
+ * ★ 为什么要去重：分页用 `start` 跳过，但 arXiv 的排序在两次请求之间**可能微变**
+ * （新论文上线 / 相关度同分），按 id 去重能避免同一篇在列表里出现两次。
+ */
+export function appendHits<T extends { source_id: string }>(prev: T[], incoming: T[]): T[] {
+  const seen = new Set(prev.map((h) => h.source_id));
+  return [...prev, ...incoming.filter((h) => !seen.has(h.source_id))];
+}

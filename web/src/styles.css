@@ -7020,3 +7020,7 @@ input, select, textarea { font-family: inherit; }
 .coll-modal .batch-btn.ghost:hover { background: var(--surface-3); border-color: var(--border-strong); }
 .coll-modal .batch-btn.primary { background: var(--accent); color: var(--on-accent); }
 .coll-modal .batch-btn.primary:hover { background: var(--accent-hover); }
+
+/* 检索结果的分页提示（"共 N 条 · 已显示 M 条" + 加载更多） */
+.paper-more { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 18px 10px; border-top: 1px solid var(--border); }
+.paper-more-count { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }

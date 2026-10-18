@@ -41,6 +41,7 @@ from papermate.services.paper_search import (
     has_han,
     normalize_categories,
     parse_arxiv_feed,
+    parse_total,
     split_arxiv_id,
     translate_zh_query,
 )
@@ -377,3 +378,27 @@ def test_build_query_does_not_translate() -> None:
     # 范围前缀照加，但**词本身不动**（单串不加引号；多词才会包成精确词组）
     assert build_query("检索增强生成", scope="ti") == "ti:检索增强生成"
     assert build_query("检索 增强", scope="ti") == 'ti:"检索 增强"'
+
+
+# ------------------------------------------------------------------ 总命中数（"这是全部吗"）
+
+def test_parse_total_reads_opensearch_field() -> None:
+    xml = ('<feed xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">'
+           '<opensearch:totalResults xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">3139</opensearch:totalResults>'
+           '</feed>')
+    assert parse_total(xml) == 3139
+
+
+def test_parse_total_missing_returns_zero() -> None:
+    """取不到就返回 0（由上层决定不显示），**不要瞎猜一个数**。"""
+    assert parse_total("<feed></feed>") == 0
+    assert parse_total("") == 0
+
+
+async def test_search_page_returns_total() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=_feed())
+
+    hits, total = await _client(handler).search_page("x")
+    assert hits == []
+    assert total == 0            # 我们的最小 feed 没有 totalResults 字段

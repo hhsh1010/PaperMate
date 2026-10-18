@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   activeTaskCount,
+  appendHits,
   buildImportPayload,
   chineseHint,
   downloadPct,
@@ -195,5 +196,17 @@ describe('检索历史（带时间戳）', () => {
     expect(parseSearchHistory('not json')).toEqual([]);
     expect(parseSearchHistory('{"a":1}')).toEqual([]);
     expect(parseSearchHistory('[{"q":"x","at":"t"},{"q":"  "},{"nope":1}]')).toEqual([{ q: 'x', at: 't' }]);
+  });
+});
+
+describe('加载更多（追加去重）', () => {
+  it('追加到末尾，且同一 source_id 只保留一条', () => {
+    const a = [{ source_id: 'a' }, { source_id: 'b' }];
+    const b = [{ source_id: 'b' }, { source_id: 'c' }];   // b 重复（分页边界重叠）
+    expect(appendHits(a, b).map((x) => x.source_id)).toEqual(['a', 'b', 'c']);
+  });
+  it('空输入不炸', () => {
+    expect(appendHits([], [])).toEqual([]);
+    expect(appendHits([{ source_id: 'a' }], [])).toHaveLength(1);
   });
 });

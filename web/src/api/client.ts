@@ -330,6 +330,8 @@ export const api = {
     query_used: string;
     translations: { zh: string; en: string }[];
     remaining_chinese: boolean;
+    total: number;
+    has_more: boolean;
     items: PaperHitDto[];
   }> {
     const qs = new URLSearchParams();

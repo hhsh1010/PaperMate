@@ -265,6 +265,20 @@ def split_arxiv_id(raw: str) -> tuple[str, str]:
     return m.group("id"), (m.group("ver") or "")
 
 
+_TOTAL_RE = re.compile(r"<opensearch:totalResults[^>]*>(\d+)<")
+
+
+def parse_total(xml_text: str) -> int:
+    """从 arXiv 响应里取**总命中条数**（`opensearch:totalResults`）。
+
+    ★ 为什么必须给用户看：arXiv 一次只返回 `max_results` 条（我们取 20），
+    不显示总数的话，用户会以为"这就是全部结果"（本次用户正是这么问的）。
+    取不到（格式变化）⇒ 返回 0，由上层决定"不显示总数"，**不要瞎猜一个数**。
+    """
+    m = _TOTAL_RE.search(xml_text or "")
+    return int(m.group(1)) if m else 0
+
+
 def parse_arxiv_feed(xml_text: str) -> list[PaperHit]:
     """把 arXiv 的 Atom 响应解析为 `PaperHit` 列表。
 
@@ -369,6 +383,15 @@ class ArxivClient:
                 await asyncio.sleep(wait)
             self._last_call = loop.time()
 
+    async def search_page(self, query: str, **kw) -> tuple[list[PaperHit], int]:
+        """检索并**同时返回总命中数**（上层的"共 N 条 / 加载更多"依赖它）。
+
+        实现上复用 `search()`（不复制重试/节流逻辑），总数由内部在成功响应时记录。
+        """
+        self._last_total = 0
+        hits = await self.search(query, **kw)
+        return hits, int(getattr(self, "_last_total", 0) or 0)
+
     @staticmethod
     def _retry_after_s(resp: httpx.Response, default: float) -> float:
         raw = resp.headers.get("retry-after", "")
@@ -419,7 +442,10 @@ class ArxivClient:
                 continue
 
             if resp.status_code == 200:
-                return parse_arxiv_feed(resp.text)
+                hits = parse_arxiv_feed(resp.text)
+                last_total = parse_total(resp.text)
+                self._last_total = last_total
+                return hits
 
             # 429 限流 / 5xx 服务端错误 ⇒ 退避重试
             if resp.status_code == 429 or 500 <= resp.status_code < 600:

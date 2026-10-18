@@ -73,6 +73,10 @@ class PaperSearchOut(BaseModel):
     translations: list[TranslationOut] = Field(default_factory=list)
     #: 替换后是否仍含汉字（true 表示"没翻干净"，前端应提示改英文）
     remaining_chinese: bool = False
+    #: ★ 总命中条数（arXiv 的 totalResults）——不让用户误以为"这 20 条就是全部"
+    total: int = 0
+    #: 是否还有更多（total > start + len(items)）
+    has_more: bool = False
     items: list[PaperHitOut]
 
 
@@ -160,9 +164,16 @@ async def search_papers(request: Request, q: str = "", limit: int = 10,
     # ★ 术语映射**只在本接口内**发生（唯一调用点）：客户端 ArxivClient 与 build_query 都不翻译
     #   ⇒ 其它调用方（脚本、未来的 Agent 工具）拿到的仍是原样关键词，是否翻译由调用方自己决定。
     used, applied = translate_zh_query(query)
+    svc = _search_svc(request)
     try:
-        hits = await _search_svc(request).search(used, limit=limit, start=start, sort=sort,
-                                                 scope=scope, categories=cats)
+        reader = getattr(svc, "search_page", None)
+        if reader is not None:
+            hits, total = await reader(used, limit=limit, start=start, sort=sort,
+                                       scope=scope, categories=cats)
+        else:
+            # 兼容只实现 search() 的替身（测试桩/第三方实现）：没有总数就按 0 上报，不瞎猜
+            hits, total = await svc.search(used, limit=limit, start=start, sort=sort,
+                                           scope=scope, categories=cats), 0
     except PaperSearchError as e:
         # 上游不可用（超时/限流/解析失败）⇒ 502，前端可提示"稍后重试"
         raise HTTPException(status_code=502, detail=str(e)) from e
@@ -171,6 +182,8 @@ async def search_papers(request: Request, q: str = "", limit: int = 10,
         query_used=used,
         translations=[TranslationOut(zh=a, en=b) for a, b in applied],
         remaining_chinese=has_han(used),
+        total=total,
+        has_more=total > (max(0, int(start)) + len(hits)),
         items=[PaperHitOut(**h.as_dict()) for h in hits],
     )
 

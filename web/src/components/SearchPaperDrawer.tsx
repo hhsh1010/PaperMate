@@ -5,6 +5,7 @@ import type { PaperHitDto, PaperImportTaskDto } from "../api/client";
 import {
   SCOPES,
   TOP_CATEGORIES,
+  appendHits,
   buildImportPayload,
   chineseHint,
   parseSearchHistory,
@@ -50,6 +51,10 @@ export function SearchPaperDrawer({
   // 最近检索（带时间戳）；存在 localStorage，**只存关键词与时间**
   const [history, setHistory] = useState<SearchHistoryEntry[]>([]);
   const [used, setUsed] = useState("");
+  // 分页：总数 / 是否还有更多 / 是否正在加载更多
+  const [total, setTotal] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
@@ -93,6 +98,8 @@ export function SearchPaperDrawer({
       setHits(res.items ?? []);
       setTranslated(res.translations ?? []);
       setUsed(res.query_used || text);
+      setTotal(res.total ?? 0);
+      setHasMore(Boolean(res.has_more));
       setSelected(new Set());
       setSearched(true);
       // 记历史：同词只保留一条（提到最前并刷新时间戳）
@@ -116,6 +123,28 @@ export function SearchPaperDrawer({
       setLoading(false);
     }
   }, [q, scope, cats]);
+
+  const loadMore = useCallback(async () => {
+    if (loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    try {
+      // ★ 用 used（翻译后的关键词）而不是输入框当前内容 —— 否则翻页会变成另一次检索
+      const res = await api.searchPapers({
+        q: used || q,
+        limit: 20,
+        start: hits.length,
+        scope,
+        categories: [...cats].join(","),
+      });
+      setHits((prev) => appendHits(prev, res.items ?? []));
+      setHasMore(Boolean(res.has_more));
+      if ((res.total ?? 0) > 0) setTotal(res.total);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [loadingMore, hasMore, used, q, hits.length, scope, cats]);
 
   const toggleCat = (c: string) => {
     setCats((prev) => {
@@ -295,6 +324,21 @@ export function SearchPaperDrawer({
               );
             })}
         </div>
+
+        {searched && hits.length > 0 && (
+          <div className="paper-more">
+            <span className="paper-more-count">
+              {total > 0
+                ? `共 ${total.toLocaleString()} 条 · 已显示 ${hits.length} 条`
+                : `已显示 ${hits.length} 条`}
+            </span>
+            {hasMore && (
+              <button className="ghost-btn" onClick={() => void loadMore()} disabled={loadingMore}>
+                {loadingMore ? "加载中…" : "加载更多"}
+              </button>
+            )}
+          </div>
+        )}
 
         <div className="paper-drawer-foot">
           <span className="paper-count">已选 {payload.items.length} 篇</span>
