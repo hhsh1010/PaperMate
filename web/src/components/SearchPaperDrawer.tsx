@@ -59,9 +59,29 @@ export function SearchPaperDrawer({
   const [loadingMore, setLoadingMore] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  // 自绘下拉（原生 select 的弹出层由系统渲染，CSS 改不动 ⇒ 灰块 + 方角）
+  const [scopeOpen, setScopeOpen] = useState(false);
+  const scopeRef = useRef<HTMLDivElement | null>(null);
 
   const hint = useMemo(() => chineseHint(q), [q]);
   const payload = useMemo(() => buildImportPayload(hits, selected), [hits, selected]);
+
+  // 点外面关下拉（比"只能再点一次按钮"自然）
+  useEffect(() => {
+    if (!scopeOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (scopeRef.current && !scopeRef.current.contains(e.target as Node)) setScopeOpen(false);
+    };
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setScopeOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onEsc);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onEsc);
+    };
+  }, [scopeOpen]);
 
   useEffect(() => {
     if (!open) return;
@@ -203,18 +223,38 @@ export function SearchPaperDrawer({
         </div>
 
         <div className="paper-search-row">
-          <select
-            className="paper-scope"
-            value={scope}
-            onChange={(e) => setScope(e.target.value as Scope)}
-            aria-label="检索范围"
-          >
-            {SCOPES.map((s) => (
-              <option key={s.value} value={s.value}>
-                {s.label}
-              </option>
-            ))}
-          </select>
+          <div className="paper-scope-wrap" ref={scopeRef}>
+            <button
+              className={`paper-scope${scopeOpen ? " on" : ""}`}
+              onClick={() => setScopeOpen((v) => !v)}
+              aria-haspopup="listbox"
+              aria-expanded={scopeOpen}
+              aria-label="检索范围"
+            >
+              {SCOPES.find((x) => x.value === scope)?.label ?? "全部字段"}
+              <span className="paper-scope-caret" aria-hidden="true">
+                ▾
+              </span>
+            </button>
+            {scopeOpen && (
+              <ul className="paper-scope-menu" role="listbox" aria-label="检索范围">
+                {SCOPES.map((x) => (
+                  <li key={x.value} role="option" aria-selected={scope === x.value}>
+                    <button
+                      className={`paper-scope-item${scope === x.value ? " on" : ""}`}
+                      onClick={() => {
+                        setScope(x.value as Scope);
+                        setScopeOpen(false);
+                      }}
+                    >
+                      <span>{x.label}</span>
+                      {scope === x.value && <span className="paper-scope-check">✓</span>}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
           <input
             ref={inputRef}
             className="paper-input"

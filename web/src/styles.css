@@ -7069,3 +7069,71 @@ input, select, textarea { font-family: inherit; }
   font-size: 13.5px;
   white-space: nowrap;
 }
+
+/* ---- 自绘下拉（原生 select 的弹出层无法用 CSS 美化：系统渲染灰块 + 方角）---- */
+.paper-scope-wrap { position: relative; flex: 0 0 auto; }
+.paper-scope {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.paper-scope:hover { border-color: var(--border-strong); }
+.paper-scope.on { border-color: var(--accent); background: var(--surface); }
+.paper-scope-caret { font-size: 10px; color: var(--muted); transition: transform 0.15s ease; }
+.paper-scope.on .paper-scope-caret { transform: rotate(180deg); }
+.paper-scope-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 5;
+  min-width: 132px;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
+}
+.paper-scope-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.paper-scope-item:hover { background: var(--surface-2); }
+.paper-scope-item.on { color: var(--accent); font-weight: 500; }
+.paper-scope-check { font-size: 11px; }
+
+/* ---- 底部两行收紧（原来 12px 上下内边距 + 胶囊按钮，显得笨重）---- */
+.paper-more { padding: 6px 18px; }
+.paper-more .ghost-btn {
+  padding: 5px 14px;
+  font-size: 12.5px;
+  border-radius: var(--radius);
+}
+.paper-drawer-foot { padding: 9px 18px; }
+.paper-drawer-foot .ghost-btn,
+.paper-drawer-foot .btn-primary {
+  padding: 6px 16px;
+  font-size: 13px;
+  border-radius: var(--radius);
+}
