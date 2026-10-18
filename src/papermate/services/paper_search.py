@@ -88,6 +88,64 @@ class PaperHit:
         }
 
 
+#: 支持的检索范围（arXiv 字段前缀）
+SCOPES: dict[str, str] = {"all": "all", "ti": "ti", "au": "au", "abs": "abs"}
+
+#: arXiv 分类形如 cs.CL / math.OC / stat.ML（小写主类 + 点 + 大写子类）
+_CATEGORY_RE = re.compile(r"^[a-z][a-z-]*\.[A-Z]{2}$")
+
+#: 用户自己写了字段前缀或布尔运算符时，**不要再替他包引号**（会改变语义）
+_HAS_FIELD_RE = re.compile(r"\b(all|ti|au|abs|cat|co|jr|rn|id)\s*:")
+_HAS_OP_RE = re.compile(r"\b(AND|OR|ANDNOT)\b")
+
+
+def normalize_categories(raw: object) -> tuple[str, ...]:
+    """校验并规范化分类列表（去重、保序）；非法分类**直接拒绝**（不静默丢弃）。"""
+    if raw is None:
+        return ()
+    items = raw if isinstance(raw, (list, tuple)) else str(raw).split(",")
+    out: list[str] = []
+    for c in items:
+        v = str(c).strip()
+        if not v:
+            continue
+        if not _CATEGORY_RE.match(v):
+            raise PaperSearchError(f"分类格式不正确：{v}（应形如 cs.CL）")
+        if v not in out:
+            out.append(v)
+    return tuple(out)
+
+
+def build_query(q: str, *, scope: str = "all", categories: tuple[str, ...] = ()) -> str:
+    """把「关键词 + 范围 + 分类」拼成 arXiv 的 search_query。
+
+    ★ 两个容易踩的点：
+    1. **范围 + 多词**：`ti:machine learning` 里第二个词会**脱离范围**（arXiv 只把前缀绑到紧邻的
+       一个词）⇒ 所以当用户没写运算符时，把整串**包成精确词组**：`ti:"machine learning"`。
+       若用户自己写了 `AND`/`ti:` 等，**保持原样**（他已经表达了意图，替他加引号会改变语义）。
+    2. **分类与主查询**之间用 `AND`，并用括号包住两边 —— 否则 `A OR B AND cat:C` 的结合次序不可控。
+    """
+    text = (q or "").strip()
+    if not text:
+        raise PaperSearchError("检索关键词为空")
+    sc = (scope or "all").strip().lower()
+    if sc not in SCOPES:
+        raise PaperSearchError(f"不支持的检索范围：{scope}（可选：{'/'.join(SCOPES)}）")
+
+    user_has_syntax = bool(_HAS_FIELD_RE.search(text) or _HAS_OP_RE.search(text))
+    if sc == "all":
+        core = text
+    elif " " in text and not user_has_syntax:
+        core = f'{sc}:"{text}"'          # 多词且无运算符 ⇒ 词组，保证范围作用于整串
+    else:
+        core = f"{sc}:{text}"
+
+    if categories:
+        cats = " OR ".join(f"cat:{c}" for c in categories)
+        return f"({core}) AND ({cats})"
+    return core
+
+
 def split_arxiv_id(raw: str) -> tuple[str, str]:
     """从 `http://arxiv.org/abs/2401.00001v2` 或 `2401.00001v2` 拆出 (id, version)。
 
@@ -215,11 +273,14 @@ class ArxivClient:
             return default
 
     async def search(self, query: str, *, limit: int = 10, start: int = 0,
-                     sort: str = "relevance") -> list[PaperHit]:
+                     sort: str = "relevance", scope: str = "all",
+                     categories: object = ()) -> list[PaperHit]:
         """检索 arXiv。
 
         - `limit`：返回条数（arXiv 单次上限 2000，业务上用 10~50 即可）
         - `sort`：`relevance` | `submitted`
+        - `scope`：`all` | `ti` | `au` | `abs`（见 `build_query` 的两条拼接口径）
+        - `categories`：`cs.CL` 之类的分类，多个用 `AND (cat:A OR cat:B)` 组合
         - 无结果 ⇒ **返回空列表**（不是异常 —— arXiv 对无结果同样返回 200）
         """
         q = (query or "").strip()
@@ -228,7 +289,8 @@ class ArxivClient:
         limit = max(1, min(int(limit), 2000))
         sort_by = "relevance" if sort == "relevance" else "submitted"
         params = {
-            "search_query": f"all:{q}",
+            "search_query": build_query(q, scope=scope,
+                                        categories=normalize_categories(categories)),
             "start": str(max(0, int(start))),
             "max_results": str(limit),
             "sortBy": sort_by,

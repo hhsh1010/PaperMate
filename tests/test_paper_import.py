@@ -317,7 +317,8 @@ def test_search_ok_with_stubbed_client(client, monkeypatch) -> None:
     monkeypatch.setenv("PAPERMATE_ENABLE_PAPER_SEARCH", "1")
 
     class FakeSearch:
-        async def search(self, q, *, limit=10, start=0, sort="relevance"):  # noqa: ANN001, ANN201
+        async def search(self, q, *, limit=10, start=0, sort="relevance",
+                         scope="all", categories=()):  # noqa: ANN001, ANN201
             from papermate.services.paper_search import PaperHit
             return [PaperHit(source="arxiv", source_id="2401.00001", version="v1",
                              title="T", abstract="A", pdf_url=GOOD_URL)]
@@ -366,3 +367,33 @@ def test_env_flag_parsing() -> None:
         os.environ.pop("PAPERMATE_ENABLE_PAPER_SEARCH", None)
         if old is not None:
             os.environ["PAPERMATE_ENABLE_PAPER_SEARCH"] = old
+
+
+def test_search_bad_scope_400(client, monkeypatch) -> None:
+    monkeypatch.setenv("PAPERMATE_ENABLE_PAPER_SEARCH", "1")
+    r = client.get("/api/v1/papers/search", params={"q": "rag", "scope": "title"})
+    assert r.status_code == 400
+    assert "不支持的检索范围" in r.json()["detail"]
+
+
+def test_search_bad_category_400(client, monkeypatch) -> None:
+    monkeypatch.setenv("PAPERMATE_ENABLE_PAPER_SEARCH", "1")
+    r = client.get("/api/v1/papers/search", params={"q": "rag", "categories": "cs;drop"})
+    assert r.status_code == 400
+    assert "分类格式" in r.json()["detail"]
+
+
+def test_search_passes_scope_and_categories(client, monkeypatch) -> None:
+    monkeypatch.setenv("PAPERMATE_ENABLE_PAPER_SEARCH", "1")
+    got = {}
+
+    class FakeSearch:
+        async def search(self, q, *, limit=10, start=0, sort="relevance", scope="all", categories=()):
+            got.update(q=q, scope=scope, categories=tuple(categories))
+            return []
+
+    client.app.state.paper_search = FakeSearch()
+    r = client.get("/api/v1/papers/search",
+                   params={"q": "rag", "scope": "ti", "categories": "cs.CL,cs.IR"})
+    assert r.status_code == 200
+    assert got == {"q": "rag", "scope": "ti", "categories": ("cs.CL", "cs.IR")}

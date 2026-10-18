@@ -25,7 +25,12 @@ from ..services.paper_import import (
     PaperImportService,
     paper_import_enabled,
 )
-from ..services.paper_search import ArxivClient, PaperSearchError
+from ..services.paper_search import (
+    SCOPES,
+    ArxivClient,
+    PaperSearchError,
+    normalize_categories,
+)
 
 router = APIRouter(tags=["papers"])
 
@@ -117,14 +122,28 @@ def _import_svc(request: Request) -> PaperImportService:
 
 @router.get("/papers/search", response_model=PaperSearchOut)
 async def search_papers(request: Request, q: str = "", limit: int = 10,
-                        start: int = 0, sort: str = "relevance") -> PaperSearchOut:
-    """检索 arXiv。**只拿元数据**：搜索页不会触发任何 PDF 下载。"""
+                        start: int = 0, sort: str = "relevance",
+                        scope: str = "all", categories: str = "") -> PaperSearchOut:
+    """检索 arXiv。**只拿元数据**：搜索页不会触发任何 PDF 下载。
+
+    - `scope`：`all` | `ti` | `au` | `abs`
+    - `categories`：逗号分隔，如 `cs.CL,cs.IR`
+    ⚠️ 「参数不合法」是**客户端错误（400）**，只有上游失败才是 502 —— 两者不能混。
+    """
     _require_enabled()
     query = (q or "").strip()
     if not query:
         raise HTTPException(status_code=400, detail="检索关键词不能为空")
+    if (scope or "all").strip().lower() not in SCOPES:
+        raise HTTPException(status_code=400,
+                            detail=f"不支持的检索范围：{scope}（可选：{'/'.join(SCOPES)}）")
     try:
-        hits = await _search_svc(request).search(query, limit=limit, start=start, sort=sort)
+        cats = normalize_categories(categories)
+    except PaperSearchError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    try:
+        hits = await _search_svc(request).search(query, limit=limit, start=start, sort=sort,
+                                                 scope=scope, categories=cats)
     except PaperSearchError as e:
         # 上游不可用（超时/限流/解析失败）⇒ 502，前端可提示"稍后重试"
         raise HTTPException(status_code=502, detail=str(e)) from e

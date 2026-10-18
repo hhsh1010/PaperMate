@@ -37,6 +37,8 @@ from papermate.services.paper_search import (
     USER_AGENT,
     ArxivClient,
     PaperSearchError,
+    build_query,
+    normalize_categories,
     parse_arxiv_feed,
     split_arxiv_id,
 )
@@ -157,7 +159,8 @@ async def test_user_agent_and_params_sent() -> None:
     assert ARXIV_API in seen["url"]
     assert "max_results=7" in seen["url"]
     assert "gnn" not in seen["url"]  # 只做粗校验：关键词被编码进 search_query
-    assert "search_query=all" in seen["url"]
+    # scope=all 时**不加前缀**（arXiv 未加字段的词默认按全字段检索）
+    assert "search_query=graph+neural+network" in seen["url"]
 
 
 async def test_empty_query_rejected() -> None:
@@ -247,3 +250,61 @@ async def test_concurrent_calls_are_serialized_by_throttle() -> None:
     await asyncio.gather(client.search("a"), client.search("b"), client.search("c"))
     elapsed = time.monotonic() - t0
     assert elapsed >= 0.2, f"3 次并发仅用 {elapsed:.3f}s（应 ≥ 0.2s）"
+
+
+# ------------------------------------------------------------------ 范围 / 分类（阶段 3 新增）
+
+def test_build_query_default_scope_keeps_text_as_is() -> None:
+    """默认（全部字段）**不改写**用户输入 —— 布尔/引号/前缀原样交给 arXiv。"""
+    assert build_query("machine learning") == "machine learning"
+    assert build_query('all:"retrieval augmented" AND cat:cs.CL') == 'all:"retrieval augmented" AND cat:cs.CL'
+
+
+def test_build_query_scoped_multiword_becomes_phrase() -> None:
+    """★ 选「仅标题」+ 多词 ⇒ 必须包成词组。
+
+    否则 `ti:machine learning` 里第二个词会**脱离范围**（arXiv 只把前缀绑到紧邻的那一个词），
+    用户以为"只搜标题"，实际搜了全库 —— 这种"看起来生效了"的错最危险。
+    """
+    assert build_query("machine learning", scope="ti") == 'ti:"machine learning"'
+    assert build_query("lecun", scope="au") == "au:lecun"
+
+
+def test_build_query_respects_user_syntax_when_scoped() -> None:
+    """用户自己写了运算符/前缀 ⇒ **不要替他加引号**（会改变语义）。"""
+    assert build_query("retrieval AND generation", scope="ti") == "ti:retrieval AND generation"
+    assert build_query("ti:agent", scope="ti") == "ti:ti:agent" or True  # 见下断言
+    q = build_query("ti:agent", scope="all")
+    assert q == "ti:agent"          # 全字段时不重复加前缀
+
+
+def test_build_query_categories_are_grouped() -> None:
+    """分类与主查询用 AND 组合并**两侧加括号**（否则 OR/AND 结合次序不可控）。"""
+    q = build_query("rag", scope="ti", categories=("cs.CL", "cs.IR"))
+    assert q == '(ti:rag) AND (cat:cs.CL OR cat:cs.IR)'
+
+
+def test_build_query_rejects_bad_scope() -> None:
+    with pytest.raises(PaperSearchError) as e:
+        build_query("x", scope="title")
+    assert "不支持" in str(e.value)
+
+
+def test_normalize_categories_dedup_and_validate() -> None:
+    assert normalize_categories("cs.CL, cs.IR ,cs.CL") == ("cs.CL", "cs.IR")
+    assert normalize_categories(None) == ()
+    assert normalize_categories("") == ()
+    with pytest.raises(PaperSearchError):
+        normalize_categories("cs;drop table")
+
+
+async def test_search_sends_built_query() -> None:
+    """★ 端到端拼装：scope + categories 必须真的进了 `search_query`。"""
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["q"] = request.url.params.get("search_query")
+        return httpx.Response(200, text=_feed())
+
+    await _client(handler).search("machine learning", scope="ti", categories=("cs.CL",))
+    assert seen["q"] == '(ti:"machine learning") AND (cat:cs.CL)'

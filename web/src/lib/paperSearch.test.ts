@@ -1,0 +1,145 @@
+/**
+ * 论文检索面板的纯逻辑判据（vitest）。
+ *
+ * 为什么这些测试重要：项目没有 testing-library ⇒ 组件只能靠 `?raw` 守结构、守不住行为。
+ * 所以"中文提示 / 导入参数 / 进度文案"这些**会出错且会误导用户**的地方，全部压到纯函数上测。
+ */
+
+import { describe, expect, it } from 'vitest';
+
+import {
+  activeTaskCount,
+  buildImportPayload,
+  chineseHint,
+  downloadPct,
+  formatBytes,
+  hasActionableTask,
+  hasChinese,
+  taskStatusText,
+  type ImportTaskView,
+  type PaperHit,
+} from './paperSearch';
+
+const hit = (over: Partial<PaperHit> = {}): PaperHit => ({
+  source: 'arxiv',
+  source_id: '2401.00001',
+  version: 'v1',
+  title: 'T',
+  authors: ['A'],
+  pdf_url: 'https://arxiv.org/pdf/2401.00001v1',
+  ...over,
+});
+
+const task = (over: Partial<ImportTaskView> = {}): ImportTaskView => ({
+  id: 't1',
+  status: 'downloading',
+  downloaded: 0,
+  total: 0,
+  ...over,
+});
+
+describe('中文关键词提示', () => {
+  it('识别中文（只认汉字，全角标点不算）', () => {
+    expect(hasChinese('检索增强')).toBe(true);
+    expect(hasChinese('retrieval augmented generation')).toBe(false);
+    expect(hasChinese('RAG（检索增强）')).toBe(true);
+    expect(hasChinese('，。！？')).toBe(false);
+  });
+
+  it('英文关键词不提示，中文关键词给可执行的建议', () => {
+    expect(chineseHint('rag')).toBe('');
+    const h = chineseHint('检索增强');
+    expect(h).toContain('英文');
+    expect(h).toContain('retrieval augmented generation'); // 给了替代写法，而不是只说"别用中文"
+  });
+});
+
+describe('导入 payload', () => {
+  it('只提交勾中的条目，且只带后端需要的字段', () => {
+    const a = hit({ source_id: 'a' });
+    const b = hit({ source_id: 'b' });
+    const payload = buildImportPayload([a, b], ['b']);
+    expect(payload.items).toHaveLength(1);
+    expect(payload.items[0].source_id).toBe('b');
+    expect(Object.keys(payload.items[0]).sort()).toEqual(
+      ['pdf_url', 'source', 'source_id', 'title', 'version'].sort(),
+    );
+  });
+
+  it('selected 里有脏 id（不在结果里）不会凭空造条目', () => {
+    const payload = buildImportPayload([hit({ source_id: 'a' })], ['a', 'ghost']);
+    expect(payload.items.map((i) => i.source_id)).toEqual(['a']);
+  });
+
+  it('缺 pdf_url 的条目被跳过（后端还会做 SSRF 校验，这里先挡空值）', () => {
+    const payload = buildImportPayload([hit({ source_id: 'a', pdf_url: '' })], ['a']);
+    expect(payload.items).toHaveLength(0);
+  });
+});
+
+describe('字节与进度', () => {
+  it('formatBytes 单位正确、未知值返回空串', () => {
+    expect(formatBytes(0)).toBe('');
+    expect(formatBytes(-1)).toBe('');
+    expect(formatBytes(2048)).toBe('2 KB');
+    expect(formatBytes(5.81 * 1048576)).toBe('5.8 MB');
+  });
+
+  it('downloadPct 只在有总长度时给百分比（否则 null ⇒ 前端显示不确定态）', () => {
+    expect(downloadPct(task({ total: 0 }))).toBeNull();
+    expect(downloadPct(task({ downloaded: 50, total: 100 }))).toBe(50);
+    expect(downloadPct(task({ downloaded: 999, total: 100 }))).toBe(100); // 防越界
+    expect(downloadPct(task({ status: 'ready', downloaded: 1, total: 1 }))).toBeNull();
+  });
+});
+
+describe('任务单行文案', () => {
+  it('下载中带百分比与大小（228 秒的教训：必须给字节数）', () => {
+    const t = task({ downloaded: Math.round(2.1 * 1048576), total: Math.round(5.8 * 1048576) });
+    const s = taskStatusText(t);
+    expect(s).toContain('下载中');
+    expect(s).toContain('%');
+    expect(s).toContain('MB');
+  });
+
+  it('下载中但长度未知 ⇒ 只显示已下载字节（不编造百分比）', () => {
+    const s = taskStatusText(task({ downloaded: 1024, total: 0 }));
+    expect(s).toBe('下载中 · 1 KB');
+  });
+
+  it('解析中优先用文档进度百分比，其次阶段名', () => {
+    expect(taskStatusText(task({ status: 'ingesting' }), { pct: 30 })).toBe('解析中 30%');
+    expect(taskStatusText(task({ status: 'ingesting' }), { stage: 'chunking' })).toBe('解析中 · chunking');
+    expect(taskStatusText(task({ status: 'ingesting' }))).toBe('解析中');
+  });
+
+  it('就绪区分"新导入"与"已在库中"', () => {
+    expect(taskStatusText(task({ status: 'ready' }))).toBe('已就绪');
+    expect(taskStatusText(task({ status: 'ready', duplicate: true }))).toBe('已在库中');
+  });
+
+  it('失败必须带可读原因（不能只显示一个红点）', () => {
+    expect(taskStatusText(task({ status: 'failed', error: '论文过大（72 MB > 60 MB 上限）' })))
+      .toBe('失败：论文过大（72 MB > 60 MB 上限）');
+    expect(taskStatusText(task({ status: 'failed' }))).toBe('失败');
+  });
+});
+
+describe('队列汇总', () => {
+  it('activeTaskCount 只数"还在跑"的（失败/完成不算）', () => {
+    expect(activeTaskCount([
+      task({ status: 'queued' }),
+      task({ status: 'downloading' }),
+      task({ status: 'ingesting' }),
+      task({ status: 'ready' }),
+      task({ status: 'failed' }),
+    ])).toBe(3);
+  });
+
+  it('hasActionableTask：有失败或有可跳转的成品才需要提示', () => {
+    expect(hasActionableTask([task({ status: 'downloading' })])).toBe(false);
+    expect(hasActionableTask([task({ status: 'failed' })])).toBe(true);
+    expect(hasActionableTask([task({ status: 'ready', doc_id: 7 })])).toBe(true);
+    expect(hasActionableTask([task({ status: 'ready', doc_id: null })])).toBe(false);
+  });
+});
