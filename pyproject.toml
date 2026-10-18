@@ -1,6 +1,6 @@
 [project]
 name = "papermate"
-version = "0.1.0"
+version = "0.1.1"
 description = "PaperMate (论文智友) — 面向科研的学术论文研读 Agent，内核 LightCore 从零自研"
 readme = "README.md"
 requires-python = ">=3.11"
