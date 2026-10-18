@@ -3752,8 +3752,8 @@ input, select, textarea { font-family: inherit; }
   font-size: 9px; font-weight: 700; color: var(--on-accent); border-radius: 4px;
   padding: 2px 5px; letter-spacing: 0.02em; flex: 0 0 auto;
 }
-.fmt-badge.pdf { background: var(--accent); }
-.fmt-badge.docx { background: var(--accent-hover); }
+.fmt-badge.pdf { background: var(--cat-red, var(--danger)); }
+.fmt-badge.docx { background: var(--accent); }
 .fmt-badge.md { background: var(--muted-2); }
 .preview-toolbar {
   display: flex; align-items: center; gap: 12px; flex-wrap: nowrap;
