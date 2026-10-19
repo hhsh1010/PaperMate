@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -330,6 +331,9 @@ async def translate_paper_titles(payload: TranslateIn, request: Request) -> Tran
         # ★ 模型调用失败 ⇒ **把上游状态码翻成人话**（402 余额 / 429 限流 / 403 免费额度 / 401 密钥…），
         #   只报 "HTTPStatusError" 用户无法判断下一步做什么；同时**不要**漏成 500。
         code, msg = describe_llm_error(e)
+        # ★ 必须把"给用户的那句话"落到日志：4xx 不会被全局错误中间件记 detail，
+        #   结果排查时只剩"HTTP 400"，完全无法判断是密钥/余额/额度/模型名（实际发生过）。
+        logging.getLogger(__name__).warning("[paper_translate] 模型调用失败 → %s %s", code, msg)
         raise HTTPException(status_code=code, detail=msg) from e
 
     raw = getattr(resp, "content", "") or ""
