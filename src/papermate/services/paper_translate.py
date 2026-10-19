@@ -54,41 +54,76 @@ def _strip_fence(raw: str) -> str:
 def parse_titles_json(raw: str, expected: int) -> list[str | None]:
     """把模型输出解析成**长度恰为 expected** 的列表；无法对应的位置为 None。
 
-    宽松处：允许 ```json 代码块、允许对象/数组两种外层（`{"items":[...]}`）、允许 i 从 1 或 0 开始。
-    严格处：**只按 i 回填**，不按顺序猜（顺序错一位会让标题张冠李戴）；条数不符不回填。
+    **宽松解析、严格校验**：模型出 JSON 的习惯各不相同，但**顺序错位是不可接受的**。
+    可接受的形状（2026-10-19 实测线上反馈「无法解析」后扩展）：
+    - 数组元素：`{"i"/"index"/"n"/"id": 1, "zh"/"translation"/"translated"/"title_zh"/"cn": "…"}`
+    - **纯字符串数组** `["甲","乙"]` —— **仅当长度恰好等于 expected** 才按位置对位
+      （长度不符就猜等于张冠李戴）；
+    - 外层包装：`{"items"/"translations"/"results"/"titles": [...]}`；
+    - 代码块 ```json、前后多余说明文字（抠第一个 [...] 再试）。
+
+    ★ 严格处：有 `i`/`index` 时**只按编号回填**（不按出现顺序猜）。
     """
     if expected <= 0:
         return []
     text = _strip_fence(raw)
+    data = None
     try:
         data = json.loads(text)
     except (TypeError, ValueError):
-        # 兜底：从文本里抠出第一个 [...] 再试一次（模型偶尔会在前后加话）
         start, end = text.find("["), text.rfind("]")
-        if start < 0 or end <= start:
-            return [None] * expected
-        try:
-            data = json.loads(text[start:end + 1])
-        except (TypeError, ValueError):
-            return [None] * expected
+        if 0 < start < end:
+            try:
+                data = json.loads(text[start:end + 1])
+            except (TypeError, ValueError):
+                data = None
 
     if isinstance(data, dict):
-        data = data.get("items") or data.get("titles") or []
+        data = (
+            data.get("items")
+            or data.get("translations")
+            or data.get("results")
+            or data.get("titles")
+            or []
+        )
     if not isinstance(data, list):
         return [None] * expected
 
     out: list[str | None] = [None] * expected
+
+    # 形状 A：纯字符串数组 —— **仅长度完全对得上**才按位置对位（此时顺序可信）
+    if data and all(isinstance(x, str) and x.strip() for x in data):
+        if len(data) == expected:
+            return [str(x).strip() for x in data]
+        return [None] * expected
+
+    # 形状 B：对象数组 —— 有编号按编号回填，没有编号则按顺序（但只接受长度一致）
+    _KEY_ZH = ("zh", "translation", "translated", "title_zh", "cn", "chinese", "text")
+    _KEY_I = ("i", "index", "n", "id")
     for item in data:
         if not isinstance(item, dict):
             continue
-        zh = str(item.get("zh") or item.get("translation") or "").strip()
+        zh = ""
+        for k in _KEY_ZH:
+            v = item.get(k)
+            if isinstance(v, str) and v.strip():
+                zh = v.strip()
+                break
         if not zh:
             continue
-        try:
-            idx = int(item.get("i"))
-        except (TypeError, ValueError):
+        idx = None
+        for k in _KEY_I:
+            v = item.get(k)
+            if isinstance(v, (int, float)) or (isinstance(v, str) and str(v).strip().isdigit()):
+                idx = int(v)
+                break
+        if idx is None:
+            # 没有编号 ⇒ 仅当"条数恰好等于 expected"时才按顺序对位
+            if len(data) == expected:
+                pos = data.index(item) if item in data else -1
+                if 0 <= pos < expected and out[pos] is None:
+                    out[pos] = zh
             continue
-        # 兼容 i 从 1 开始（约定）与从 0 开始（模型偶发）
         pos = idx - 1 if 1 <= idx <= expected else idx
         if 0 <= pos < expected and out[pos] is None:
             out[pos] = zh

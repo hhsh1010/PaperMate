@@ -339,6 +339,11 @@ async def translate_paper_titles(payload: TranslateIn, request: Request) -> Tran
     raw = getattr(resp, "content", "") or ""
     parsed = parse_titles_json(raw, len(items))
     if all(x is None for x in parsed):
+        # ★ 必须把原始输出落到日志（截 500 字）：否则"无法解析"时**完全看不到模型说了什么**，
+        #   就没法判断该放宽解析器还是该改 prompt（2026-10-19 实际发生过）。
+        logging.getLogger(__name__).warning(
+            "[paper_translate] 输出无法解析，raw(前 500 字)=%r", (raw or "")[:500]
+        )
         raise HTTPException(status_code=502, detail="翻译服务返回的内容无法解析（不是预期的 JSON），请重试")
     return TranslateOut(items=[
         TranslatedItemOut(source_id=it.source_id, zh=(zh or ""))

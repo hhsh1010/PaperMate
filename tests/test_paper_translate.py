@@ -124,3 +124,34 @@ def test_describe_network_error_without_response() -> None:
     code, msg = describe_llm_error(RuntimeError("connection reset"))
     assert code == 502
     assert "RuntimeError" in msg or "网络" in msg
+
+
+# ------------------------------------------------------------------ 解析器的形状容忍（线上实测扩展）
+
+def test_parse_plain_string_list() -> None:
+    """纯字符串数组：**长度恰好等于 expected** ⇒ 按位置对位（顺序此时可信）。"""
+    assert parse_titles_json('["甲", "乙"]', 2) == ["甲", "乙"]
+
+
+def test_parse_plain_string_list_wrong_len_refused() -> None:
+    """★ 长度对不上就**全部不认**（猜位置等于张冠李戴）。"""
+    assert parse_titles_json('["甲"]', 2) == [None, None]
+    assert parse_titles_json('["甲", "乙", "丙"]', 2) == [None, None]
+
+
+def test_parse_index_key_alias() -> None:
+    """模型常写 index / n / id，不只是 i。"""
+    assert parse_titles_json('[{"index":1,"zh":"甲"},{"n":2,"zh":"乙"}]', 2) == ["甲", "乙"]
+
+
+def test_parse_value_key_aliases() -> None:
+    """翻译值的键名不统一：translation / title_zh / cn 都要认。"""
+    raw = '[{"i":1,"translation":"甲"},{"i":2,"title_zh":"乙"},{"i":3,"cn":"丙"}]'
+    assert parse_titles_json(raw, 3) == ["甲", "乙", "丙"]
+
+
+def test_parse_wrapper_variants() -> None:
+    """外层包装常见四种。"""
+    for key in ("items", "translations", "results", "titles"):
+        raw = f'{{"{key}": [{{"i":1,"zh":"甲"}}]}}'
+        assert parse_titles_json(raw, 1) == ["甲"], key
