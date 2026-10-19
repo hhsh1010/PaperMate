@@ -306,14 +306,32 @@ async def translate_paper_titles(payload: TranslateIn, request: Request) -> Tran
         )
 
     llm = request.app.state.chat_svc._llm_from_raw(model)
+    # ★ 必须构造 ChatMessage（不能传普通 dict）：router 里 to_openai() 要取 role.value，
+    #   传 dict 会 `AttributeError: 'dict' object has no attribute 'to_openai'`（线上实际踩过）。
+    from lightcore.llm.base import ChatMessage, Role  # 局部导入，避免 API 层顶部多一条跨层依赖
+
+    raw_msgs = build_messages([it.title for it in items])
+    msgs = [
+        ChatMessage(
+            role=Role.SYSTEM if m["role"] == "system" else Role.USER,
+            content=m["content"],
+        )
+        for m in raw_msgs
+    ]
     try:
         resp = await asyncio.wait_for(
-            llm.chat(build_messages([it.title for it in items]),
-                     temperature=0.2, max_tokens=MAX_OUTPUT_TOKENS),
+            llm.chat(msgs, temperature=0.2, max_tokens=MAX_OUTPUT_TOKENS),
             timeout=45.0,
         )
     except TimeoutError as e:
         raise HTTPException(status_code=504, detail="翻译超时（45s），请重试或减少条数") from e
+    except Exception as e:  # noqa: BLE001
+        # ★ 模型调用失败（无 key / 限流 / 402 / 网络）⇒ **可读 502**；
+        #   不要漏出去变成 500「服务器内部错误」（用户完全无法据此自救）
+        raise HTTPException(
+            status_code=502,
+            detail=f"调用模型失败（{type(e).__name__}）：请到设置页检查模型与密钥，或稍后重试。",
+        ) from e
 
     raw = getattr(resp, "content", "") or ""
     parsed = parse_titles_json(raw, len(items))

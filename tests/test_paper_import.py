@@ -625,3 +625,86 @@ def test_search_last_page_has_no_more(client, monkeypatch) -> None:
     body = client.get("/api/v1/papers/search", params={"q": "x", "start": 20, "limit": 20}).json()
     assert body["total"] == 20
     assert body["has_more"] is False
+
+
+# ------------------------------------------------------------------ 标题中译（端到端）
+
+def _with_model(client, monkeypatch, llm):
+    """把 default_model 设成非 fake，并把 chat_svc 换成返回指定 LLM 的替身。"""
+    from types import SimpleNamespace as _NS
+
+    from papermate import runtime_settings
+
+    st = runtime_settings.get_state()
+    old = st.get("default_model")
+    st["default_model"] = "deepseek-chat"
+
+    class _Chat:
+        def _llm_from_raw(self, model):  # noqa: ANN001, ANN201
+            return llm
+
+    monkeypatch.setattr(client.app.state, "chat_svc", _Chat())
+    return st, old, _NS
+
+
+def test_translate_passes_chatmessage_objects(client, monkeypatch) -> None:
+    """★ 传给 LLM 的必须是 ChatMessage 对象，不能是普通 dict。
+
+    线上真实故障：传 dict ⇒ `router.to_openai()` 取 role.value ⇒
+    `AttributeError: 'dict' object has no attribute 'to_openai'` ⇒ 500「服务器内部错误」。
+    这条用例会**真的调用 to_openai()**，所以传 dict 必然红。
+    """
+    monkeypatch.setenv("PAPERMATE_ENABLE_PAPER_SEARCH", "1")
+    seen = {}
+
+    class _LLM:
+        async def chat(self, messages, **kw):  # noqa: ANN001, ANN003, ANN201
+            seen["msgs"] = messages
+            [m.to_openai() for m in messages]      # 复刻 router 的行为
+            from types import SimpleNamespace as NS
+            return NS(content='[{"i":1,"zh":"有向目标检测综述"}]')
+
+    st, old, _ = _with_model(client, monkeypatch, _LLM())
+    try:
+        r = client.post("/api/v1/papers/translate-titles",
+                        json={"items": [{"source_id": "a", "title": "Oriented object detection"}]})
+        assert r.status_code == 200, r.text
+        assert r.json()["items"] == [{"source_id": "a", "zh": "有向目标检测综述"}]
+        assert all(hasattr(m, "to_openai") for m in seen["msgs"]), "必须是 ChatMessage，不能是 dict"
+    finally:
+        st["default_model"] = old
+
+
+def test_translate_model_failure_returns_readable_502(client, monkeypatch) -> None:
+    """★ 模型调用失败（无 key/限流）⇒ 可读 502，**不能**漏成 500「服务器内部错误」。"""
+    monkeypatch.setenv("PAPERMATE_ENABLE_PAPER_SEARCH", "1")
+
+    class _Boom:
+        async def chat(self, messages, **kw):  # noqa: ANN001, ANN003, ANN201
+            raise RuntimeError("401 invalid api key")
+
+    st, old, _ = _with_model(client, monkeypatch, _Boom())
+    try:
+        r = client.post("/api/v1/papers/translate-titles",
+                        json={"items": [{"source_id": "a", "title": "X"}]})
+        assert r.status_code == 502
+        assert "设置页" in r.json()["detail"]
+    finally:
+        st["default_model"] = old
+
+
+def test_translate_fake_model_rejected(client, monkeypatch) -> None:
+    """fake/未配置 ⇒ 400 可读提示（不要返回占位文本冒充翻译）。"""
+    monkeypatch.setenv("PAPERMATE_ENABLE_PAPER_SEARCH", "1")
+    from papermate import runtime_settings
+
+    st = runtime_settings.get_state()
+    old = st.get("default_model")
+    st["default_model"] = "fake"
+    try:
+        r = client.post("/api/v1/papers/translate-titles",
+                        json={"items": [{"source_id": "a", "title": "X"}]})
+        assert r.status_code == 400
+        assert "设置页" in r.json()["detail"]
+    finally:
+        st["default_model"] = old

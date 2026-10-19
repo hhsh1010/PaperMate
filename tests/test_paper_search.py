@@ -254,7 +254,8 @@ async def test_concurrent_calls_are_serialized_by_throttle() -> None:
     t0 = time.monotonic()
     await asyncio.gather(client.search("a"), client.search("b"), client.search("c"))
     elapsed = time.monotonic() - t0
-    assert elapsed >= 0.2, f"3 次并发仅用 {elapsed:.3f}s（应 ≥ 0.2s）"
+    # 同 test_throttle_enforces_min_interval：容差 0.02s（定时器/单调时钟粒度会让"刚好 0.2"偶发测成 0.199）
+    assert elapsed >= 0.2 - 0.02, f"3 次并发仅用 {elapsed:.3f}s（应 ≥ 0.2s）"
 
 
 # ------------------------------------------------------------------ 范围 / 分类（阶段 3 新增）
