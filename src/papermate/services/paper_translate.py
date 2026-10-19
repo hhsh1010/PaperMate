@@ -103,3 +103,72 @@ def is_fake_model(model_id: str | None) -> bool:
     """
     m = (model_id or "").strip().lower()
     return m in ("", "fake", "api-fake", "apifake")
+
+
+#: 上游错误体里可能带 key（如 "incorrect api key sk-xxx"）⇒ 一律打码
+_KEY_RE = re.compile(r"sk-[A-Za-z0-9_\-]{6,}")
+#: 常见状态码 → 人话（按项目踩过的三类：402 余额 / 429 限流 / 403 免费额度耗尽）
+_STATUS_HINT = {
+    400: "请求被模型拒绝（400），通常是我们发的参数有问题",
+    401: "模型密钥无效或已过期（401）",
+    402: "模型账户余额不足（402），请充值或换用其它模型",
+    403: "没有权限，或免费额度已用完（403）",
+    404: "模型不存在或已被下线（404）",
+    429: "请求太频繁被限流（429），请等十几秒再试",
+}
+
+
+def _mask(text: str) -> str:
+    return _KEY_RE.sub("sk-***", text or "")
+
+
+def _upstream_message(resp: object) -> str:
+    """从上游响应体里抠出最有用的一句（OpenAI 兼容格式 error.message）。"""
+    try:
+        body = getattr(resp, "text", "") or ""
+    except Exception:  # noqa: BLE001
+        body = ""
+    if not body:
+        return ""
+    try:
+        data = json.loads(body)
+        msg = ""
+        if isinstance(data, dict):
+            err = data.get("error")
+            if isinstance(err, dict):
+                msg = str(err.get("message") or err.get("code") or "")
+            msg = msg or str(data.get("message") or data.get("detail") or "")
+        if msg:
+            return _mask(msg)[:200]
+    except (TypeError, ValueError):
+        pass
+    return _mask(" ".join(body.split()))[:200]
+
+
+def describe_llm_error(exc: Exception) -> tuple[int, str]:
+    """把模型调用异常翻成 (给前端的 HTTP 状态码, 人话)。
+
+    ★ 为什么必须带上游状态码：只说 "HTTPStatusError" 用户**完全无法判断**是密钥错、余额不足还是限流
+      —— 项目历史上这三类都踩过（402/429/403）。必须让用户看完就知道下一步做什么。
+    ★ 为什么单独返回状态码：401/402/403 是**用户可修复**的（换 key / 充值 / 换模型）⇒ 用 400 语义（客户端问题）；
+      429 原样 429（可重试）；上游 5xx / 网络 ⇒ 502（服务端问题）。
+    ★ 脱敏：上游错误体常回显 key（`incorrect api key sk-xxx`）⇒ 一律打码再返回。
+    """
+    resp = getattr(exc, "response", None)
+    status = getattr(resp, "status_code", None)
+    detail = _upstream_message(resp) if resp is not None else ""
+
+    if isinstance(status, int):
+        if status in _STATUS_HINT:
+            code = 429 if status == 429 else 400
+            tail = f"：{detail}" if detail else "。请到设置页检查模型与密钥。"
+            return code, _STATUS_HINT[status] + tail
+        if status >= 500:
+            tail = f"：{detail}" if detail else "。请稍后重试。"
+            return 502, f"模型服务故障（{status}）" + tail
+        tail = f"：{detail}" if detail else ""
+        return 502, f"调用模型失败（HTTP {status}）" + tail
+
+    # 没有响应对象：网络 / 超时 / 其它
+    tail = f"：{detail}" if detail else "。请检查网络与设置页的模型配置。"
+    return 502, f"调用模型失败（{type(exc).__name__}）" + tail

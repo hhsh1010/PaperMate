@@ -39,6 +39,7 @@ from ..services.paper_translate import (
     MAX_OUTPUT_TOKENS,
     MAX_TITLES,
     build_messages,
+    describe_llm_error,
     is_fake_model,
     parse_titles_json,
 )
@@ -326,12 +327,10 @@ async def translate_paper_titles(payload: TranslateIn, request: Request) -> Tran
     except TimeoutError as e:
         raise HTTPException(status_code=504, detail="翻译超时（45s），请重试或减少条数") from e
     except Exception as e:  # noqa: BLE001
-        # ★ 模型调用失败（无 key / 限流 / 402 / 网络）⇒ **可读 502**；
-        #   不要漏出去变成 500「服务器内部错误」（用户完全无法据此自救）
-        raise HTTPException(
-            status_code=502,
-            detail=f"调用模型失败（{type(e).__name__}）：请到设置页检查模型与密钥，或稍后重试。",
-        ) from e
+        # ★ 模型调用失败 ⇒ **把上游状态码翻成人话**（402 余额 / 429 限流 / 403 免费额度 / 401 密钥…），
+        #   只报 "HTTPStatusError" 用户无法判断下一步做什么；同时**不要**漏成 500。
+        code, msg = describe_llm_error(e)
+        raise HTTPException(status_code=code, detail=msg) from e
 
     raw = getattr(resp, "content", "") or ""
     parsed = parse_titles_json(raw, len(items))

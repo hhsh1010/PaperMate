@@ -11,6 +11,7 @@ from __future__ import annotations
 from papermate.services.paper_translate import (
     MAX_TITLES,
     build_messages,
+    describe_llm_error,
     is_fake_model,
     parse_titles_json,
 )
@@ -67,3 +68,59 @@ def test_is_fake_model() -> None:
 def test_max_titles_kept_in_sync_with_page_size() -> None:
     """一页检索 20 条 ⇒ 一次翻译上限也应是 20（两个数字分开写会漂移）。"""
     assert MAX_TITLES == 20
+
+
+# ------------------------------------------------------------------ 模型调用失败的人话映射
+
+class _Resp:
+    def __init__(self, status: int, text: str = "") -> None:
+        self.status_code = status
+        self.text = text
+
+
+class _HTTPErr(Exception):
+    """模拟 httpx.HTTPStatusError（有 .response）。"""
+
+    def __init__(self, status: int, text: str = "") -> None:
+        super().__init__(f"HTTP {status}")
+        self.response = _Resp(status, text)
+
+
+def test_describe_401_key_invalid_and_masked() -> None:
+    """★ 401 ⇒ 密钥无效；且**上游回显的 key 必须打码**（不能把密钥发到前端/日志）。"""
+    code, msg = describe_llm_error(
+        _HTTPErr(401, '{"error":{"message":"Incorrect API key provided: sk-abcdef123456"}}')
+    )
+    assert code == 400
+    assert "密钥" in msg
+    assert "sk-abcdef123456" not in msg
+    assert "sk-***" in msg
+
+
+def test_describe_402_balance() -> None:
+    code, msg = describe_llm_error(_HTTPErr(402, '{"error":{"message":"Insufficient Balance"}}'))
+    assert code == 400
+    assert "余额" in msg and "Insufficient Balance" in msg
+
+
+def test_describe_403_quota() -> None:
+    code, msg = describe_llm_error(_HTTPErr(403, "free quota exhausted"))
+    assert code == 400
+    assert "额度" in msg
+
+
+def test_describe_429_rate_limit() -> None:
+    """429 是**可重试**的 ⇒ 状态码原样透出 429（前端可提示"稍后再试"）。"""
+    code, msg = describe_llm_error(_HTTPErr(429))
+    assert code == 429 and "限流" in msg
+
+
+def test_describe_5xx_is_502() -> None:
+    code, msg = describe_llm_error(_HTTPErr(503, "service unavailable"))
+    assert code == 502 and "503" in msg
+
+
+def test_describe_network_error_without_response() -> None:
+    code, msg = describe_llm_error(RuntimeError("connection reset"))
+    assert code == 502
+    assert "RuntimeError" in msg or "网络" in msg
