@@ -359,6 +359,19 @@ export const api = {
     return json(await fetch(`${BASE}/papers/import`));
   },
 
+  /** 批量翻译论文标题（一次 LLM 调用，最多 20 条；不点按钮不会调用）。 */
+  async translatePaperTitles(items: { source_id: string; title: string }[]): Promise<{
+    items: { source_id: string; zh: string }[];
+  }> {
+    return json(
+      await fetch(`${BASE}/papers/translate-titles`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items }),
+      }),
+    );
+  },
+
   async getPaperImportTask(id: string): Promise<PaperImportTaskDto> {
     return json(await fetch(`${BASE}/papers/import/${encodeURIComponent(id)}`));
   },

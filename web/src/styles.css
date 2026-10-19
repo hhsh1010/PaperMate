@@ -7278,3 +7278,8 @@ input, select, textarea { font-family: inherit; }
 @media (prefers-reduced-motion: reduce) {
   .collapse { transition: none; }
 }
+
+/* 标题中译：英文原文在上（保留可核对），中文在下（次要色，不抢主标题） */
+.paper-hit-zh { font-size: 12.5px; color: var(--muted); margin-top: 2px; line-height: 1.5; }
+.paper-translate-btn { padding: 5px 12px; font-size: 12.5px; border-radius: var(--radius); white-space: nowrap; }
+.paper-more { gap: 8px; }

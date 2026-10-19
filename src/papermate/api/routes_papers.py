@@ -17,6 +17,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
@@ -32,6 +34,13 @@ from ..services.paper_search import (
     has_han,
     normalize_categories,
     translate_zh_query,
+)
+from ..services.paper_translate import (
+    MAX_OUTPUT_TOKENS,
+    MAX_TITLES,
+    build_messages,
+    is_fake_model,
+    parse_titles_json,
 )
 
 router = APIRouter(tags=["papers"])
@@ -251,3 +260,66 @@ def cancel_import_task(task_id: str, request: Request) -> CancelOut:
     if task is None:
         raise HTTPException(status_code=404, detail="任务不存在")
     return CancelOut(ok=True, cancelled=svc.cancel(task_id))
+
+
+# ------------------------------------------------------------------ 标题中译
+
+class TranslateItemIn(BaseModel):
+    source_id: str
+    title: str
+
+
+class TranslateIn(BaseModel):
+    items: list[TranslateItemIn]
+
+
+class TranslatedItemOut(BaseModel):
+    source_id: str
+    #: 中文标题；**空串表示这条没译出来**（前端保留英文原文，不要显示空）
+    zh: str = ""
+
+
+class TranslateOut(BaseModel):
+    items: list[TranslatedItemOut]
+
+
+@router.post("/papers/translate-titles", response_model=TranslateOut)
+async def translate_paper_titles(payload: TranslateIn, request: Request) -> TranslateOut:
+    """把检索结果的**英文标题批量译成中文**（一次 LLM 调用，最多 20 条）。
+
+    ★ 为什么必须拦住 fake：`_llm_from_raw` 对未知/缺失模型会**静默退化成 ApiFakeLLM**，
+      那种情况下会返回占位文本 ⇒ 用户看到一堆假标题，比直接报错更糟。
+    ★ 成本：一次调用 ≈ 20 条短标题，输出上限 2000 tokens，**不点按钮不会产生任何调用**。
+    """
+    _require_enabled()
+    items = (payload.items or [])[:MAX_TITLES]
+    if not items:
+        raise HTTPException(status_code=400, detail="没有要翻译的标题")
+
+    from .. import runtime_settings  # 延迟导入：避免模块级循环依赖
+
+    model = str(runtime_settings.get_state().get("default_model") or "")
+    if is_fake_model(model):
+        raise HTTPException(
+            status_code=400,
+            detail="当前没有配置可用的模型（或仍是 fake），无法翻译标题；请先在设置页配置模型与密钥。",
+        )
+
+    llm = request.app.state.chat_svc._llm_from_raw(model)
+    try:
+        resp = await asyncio.wait_for(
+            llm.chat(build_messages([it.title for it in items]),
+                     temperature=0.2, max_tokens=MAX_OUTPUT_TOKENS),
+            timeout=45.0,
+        )
+    except TimeoutError as e:
+        raise HTTPException(status_code=504, detail="翻译超时（45s），请重试或减少条数") from e
+
+    raw = getattr(resp, "content", "") or ""
+    parsed = parse_titles_json(raw, len(items))
+    if all(x is None for x in parsed):
+        raise HTTPException(status_code=502, detail="翻译服务返回的内容无法解析（不是预期的 JSON），请重试")
+    return TranslateOut(items=[
+        TranslatedItemOut(source_id=it.source_id, zh=(zh or ""))
+        for it, zh in zip(items, parsed, strict=True)
+    ])

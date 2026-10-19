@@ -59,6 +59,9 @@ export function SearchPaperDrawer({
   const [total, setTotal] = useState(0);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  // 标题中译（source_id → 中文标题）；空串表示该条没译出来 ⇒ 只显示英文原文
+  const [zhTitles, setZhTitles] = useState<Record<string, string>>({});
+  const [translating, setTranslating] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
   // 自绘下拉（原生 select 的弹出层由系统渲染，CSS 改不动 ⇒ 灰块 + 方角）
@@ -169,6 +172,26 @@ export function SearchPaperDrawer({
       setLoadingMore(false);
     }
   }, [loadingMore, hasMore, used, q, hits.length, scope, cats]);
+
+  const translateTitles = useCallback(async () => {
+    if (translating || hits.length === 0) return;
+    setTranslating(true);
+    setErr("");
+    try {
+      const res = await api.translatePaperTitles(
+        hits.map((h) => ({ source_id: h.source_id, title: h.title })),
+      );
+      const map: Record<string, string> = {};
+      for (const it of res.items ?? []) {
+        if (it.zh) map[it.source_id] = it.zh;
+      }
+      setZhTitles((prev) => ({ ...prev, ...map }));
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setTranslating(false);
+    }
+  }, [translating, hits]);
 
   const toggleCat = (c: string) => {
     setCats((prev) => {
@@ -361,6 +384,9 @@ export function SearchPaperDrawer({
                   <input type="checkbox" checked={on} onChange={() => toggleHit(h.source_id)} />
                   <div className="paper-hit-main">
                     <div className="paper-hit-title">{h.title}</div>
+                    {zhTitles[h.source_id] && (
+                      <div className="paper-hit-zh">{zhTitles[h.source_id]}</div>
+                    )}
                     <div className="paper-hit-meta">
                       {(h.authors ?? []).slice(0, 3).join(", ")}
                       {h.authors && h.authors.length > 3 ? " 等" : ""}
@@ -390,6 +416,14 @@ export function SearchPaperDrawer({
                 ? `共 ${total.toLocaleString()} 条 · 已显示 ${hits.length} 条`
                 : `已显示 ${hits.length} 条`}
             </span>
+            <button
+              className="ghost-btn paper-translate-btn"
+              onClick={() => void translateTitles()}
+              disabled={translating || hits.length === 0}
+              title="把英文标题译成中文（一次调用，仅当前列表）"
+            >
+              {translating ? "翻译中…" : "翻译标题"}
+            </button>
             {canLoadMore(hits.length, hasMore) ? (
               <button className="ghost-btn" onClick={() => void loadMore()} disabled={loadingMore}>
                 {loadingMore ? "加载中…" : "加载更多"}
