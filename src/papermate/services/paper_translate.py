@@ -25,7 +25,9 @@ MAX_TITLES = 20
 #: 单次调用的输出上限（20 条中文标题 ≈ 20×30 字，留足余量）
 MAX_OUTPUT_TOKENS = 2000
 
-SYSTEM_PROMPT = (
+# ★ 命名：不能叫 SYSTEM_PROMPT —— 项目有跨文件约束「全库只能有一处 SYSTEM_PROMPT」
+#   （tests/test_trace_and_prompts.py 会扫源码），主提示词在 prompts/system.py。
+TRANSLATE_SYSTEM_PROMPT = (
     "你是学术论文标题翻译助手。把英文论文标题翻译成**简洁准确的中文**。"
     "要求：保留模型名、方法名、数据集名与通用缩写（如 RAG、ResNet、LiDAR、Transformer）不译；"
     "不要添加解释、不要扩写；只输出 JSON 数组，格式为 [{\"i\":1,\"zh\":\"…\"}]，i 与输入编号一致。"
@@ -36,7 +38,7 @@ def build_messages(titles: list[str]) -> list[dict[str, str]]:
     """构造一次批量翻译的 messages。编号从 1 开始，便于回填与校验。"""
     lines = [f"{i}. {t.strip()}" for i, t in enumerate(titles, 1)]
     return [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": TRANSLATE_SYSTEM_PROMPT},
         {"role": "user", "content": "请翻译下列论文标题：\n" + "\n".join(lines)},
     ]
 
