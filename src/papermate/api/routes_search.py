@@ -1503,6 +1503,15 @@ async def stream_message(session_id: int, body: ChatRequest, request: Request) -
             # ① 轮询**必须 `await`**；② 「断连 → 取消技能」必须**在循环内**（原实现写在外面，
             # 从未生效过）。现在这两点都在 `_stream_skill_output` 内保证，并由单元测试钉住。
             skill_task = asyncio.create_task(skill.run(ctx))
+            # ★ 2026-10-23：技能是**一次性 return**（`run() -> SkillResult`），内部多步不产增量
+            #   ⇒ 用户点命令后长时间空白、最后整段刷出（`message_delta` 管道在、但技能不往里写）。
+            #   这里先推一条 **progress** 让前端立刻显示"正在执行 /综述…"，至少不是空白。
+            #   真正的"逐段进度"需要把 12 个技能改成生成器（另立任务）。
+            yield sse_event("progress", {
+                "stage": "running_skill",
+                "skill": getattr(skill, "name", type(skill).__name__),
+                "text": f"正在执行 /{getattr(skill, 'name', '技能')}…",
+            })
             try:
                 async for _delta in _stream_skill_output(
                         skill_task, skill_q, request, cancel_flag, session_id):
