@@ -83,6 +83,11 @@ class SettingsUpdate(BaseModel):
     # 重排推理加速（T-03，2026-09-24）：fp16 半精度 + 候选截断长度（0 = 不限长 = 改动前行为）
     rag_reranker_fp16: bool | None = None
     rag_reranker_max_length: int | None = None
+    # 单次请求上下文预算（★ 2026-10-22：前端一直在发这个字段，但此前**后端模型里没有它**
+    #   ⇒ Pydantic 静默丢弃 ⇒ 设置页调预算"改了没反应"。属典型的死配置项。）
+    max_tokens_budget: int | None = None
+    # True（默认）= 按模型窗口自动推断 clamp(窗口×0.25, 12k, 100k)；False = 用上面的显式值
+    max_tokens_budget_auto: bool | None = None
 
 
 class SettingsTestReq(BaseModel):
@@ -128,6 +133,12 @@ def put_settings(body: SettingsUpdate, request: Request) -> dict:
                 ),
             )
         payload["agent_rules"] = body.agent_rules
+    # 单次上下文预算：显式值夹到 [12k, 300k]（下限防"设成 1k 直接不可用"，上限对应 1M 窗口的保守用法）
+    if body.max_tokens_budget is not None:
+        payload["max_tokens_budget"] = max(12_000, min(int(body.max_tokens_budget), 300_000))
+    if body.max_tokens_budget_auto is not None:
+        payload["max_tokens_budget_auto"] = bool(body.max_tokens_budget_auto)
+
     if body.providers is not None:
         payload["providers"] = {
             name: prov.model_dump(exclude_none=True) for name, prov in body.providers.items()

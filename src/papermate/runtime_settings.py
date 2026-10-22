@@ -380,6 +380,10 @@ def update(payload: dict) -> dict:
         if isinstance(payload.get("max_tokens_budget"), int) and not isinstance(payload.get("max_tokens_budget"), bool) \
                 and payload["max_tokens_budget"] >= 1000:
             state["max_tokens_budget"] = int(payload["max_tokens_budget"])
+        # ★ 2026-10-22：auto 标志也必须落库。`update()` 是**逐字段白名单**，
+        #   少一个分支 ⇒ 「PUT 成功、读回来还是默认值」的假成功（设置页改预算无效的根因之一）。
+        if isinstance(payload.get("max_tokens_budget_auto"), bool):
+            state["max_tokens_budget_auto"] = payload["max_tokens_budget_auto"]
         if isinstance(payload.get("max_tokens_per_turn"), int) and not isinstance(payload.get("max_tokens_per_turn"), bool) \
                 and payload["max_tokens_per_turn"] >= 1000:
             state["max_tokens_per_turn"] = int(payload["max_tokens_per_turn"])
@@ -467,6 +471,9 @@ def public_view(state: dict | None = None) -> dict:
         "figure_enrich_deps": _enrich_deps(),
         "cost_limit_per_turn": state.get("cost_limit_per_turn", 1.0),
         "max_tokens_budget": state.get("max_tokens_budget", 30000),
+        # ★ 2026-10-22：auto 标志也必须在白名单里 —— 本函数是**手写字典**，
+        #   新增字段不加这里 ⇒ PUT 成功但前端读回来是默认值（"改了没反应"）。
+        "max_tokens_budget_auto": state.get("max_tokens_budget_auto", True),
         "max_tokens_per_turn": state.get("max_tokens_per_turn", 150000),
         "agent_rules": state.get("agent_rules", ""),
         "memory_embedder": state.get("memory_embedder", "hash"),

@@ -487,6 +487,7 @@ export function SettingsPage() {
         agent_rules?: string;
         /** 单次请求上下文上限（≥1000 的整数才被后端接受） */
         max_tokens_budget?: number;
+        max_tokens_budget_auto?: boolean;
         /** 整轮累计 token 上限（≥1000 的整数才被后端接受） */
         max_tokens_per_turn?: number;
         features?: Record<string, boolean>;
@@ -508,6 +509,9 @@ export function SettingsPage() {
       // 只在合法范围内提交，避免无效值覆盖（后端同样有 ≥1000 校验，双保险）
       if (Number.isFinite(tokenBudget) && tokenBudget >= 1000) {
         req.max_tokens_budget = Math.floor(tokenBudget);
+        // ★ 必须同时关掉 auto：`resolve_budget_for` 在 auto=True 时**忽略显式值**
+        //   （按模型窗口 clamp 推算）⇒ 只发数值等于"改了没反应"。
+        req.max_tokens_budget_auto = false;
       }
       if (Number.isFinite(tokenPerTurn) && tokenPerTurn >= 1000) {
         req.max_tokens_per_turn = Math.floor(tokenPerTurn);
@@ -996,14 +1000,15 @@ export function SettingsPage() {
             <input
               className="settings-control"
               type="number"
-              min={1000}
-              step={1000}
+              min={12000}
+              max={300000}
+              step={10000}
               value={tokenBudget}
               onChange={(e) => setTokenBudget(Number(e.target.value))}
             />
             <p className="muted">
               {lang === "zh"
-                ? "单次发给模型的 prompt 超过该值即中止本轮（防止上下文爆炸）；它同时决定历史压缩阈值（该值的一半）。绑定多篇文档时单轮 prompt 可达 2 万以上，建议不低于 30000。"
+                ? "单次发给模型的 prompt 超过该值即中止本轮，同时决定历史压缩阈值（该值 × 0.7）。可调 12K~300K：调高会让单次请求更贵更慢（deepseek 约 ¥1/百万 tokens；300K 约 ¥0.3/次、首字 +4.5s），但能减少长对话里的历史压缩。默认建议 60K~100K。"
                 : "A turn is aborted when a single request's prompt exceeds this (prevents runaway context); it also sets the history-compaction threshold (half of it). With several documents attached a single prompt can exceed 20k, so keep it ≥ 30000."}
             </p>
             <span className="settings-label">

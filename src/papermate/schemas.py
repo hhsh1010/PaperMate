@@ -629,6 +629,8 @@ class SettingsOut(BaseModel):
     figure_enrich_deps: dict
     cost_limit_per_turn: float
     max_tokens_budget: int
+    # ★ 2026-10-22：auto 标志必须一并回显 —— 否则前端读不到它，"自动/显式"状态无从判断
+    max_tokens_budget_auto: bool = True
     max_tokens_per_turn: int
     agent_rules: str
     memory_embedder: str

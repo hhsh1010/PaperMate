@@ -716,3 +716,44 @@ def test_translate_fake_model_rejected(client, monkeypatch) -> None:
         assert "设置页" in r.json()["detail"]
     finally:
         st["default_model"] = old
+
+
+# ------------------------------------------------------------------ 设置页：上下文预算（复用本文件 client fixture）
+
+def test_settings_accepts_max_tokens_budget(client, monkeypatch) -> None:
+    """★ 2026-10-22：前端一直发 max_tokens_budget，但后端模型里没有该字段 ⇒ Pydantic 静默丢弃。
+    这条钉住"发得进去 + 读得出来"（否则设置页调预算等于没调）。
+    """
+    from papermate import runtime_settings
+
+    old = runtime_settings.get_state().get("max_tokens_budget")
+    old_auto = runtime_settings.get_state().get("max_tokens_budget_auto")
+    try:
+        r = client.put("/api/v1/settings", json={"max_tokens_budget": 150_000,
+                                                 "max_tokens_budget_auto": False})
+        assert r.status_code == 200, r.text
+        assert r.json()["max_tokens_budget"] == 150_000
+        assert r.json()["max_tokens_budget_auto"] is False
+    finally:
+        st = runtime_settings.get_state()
+        if old is not None:
+            st["max_tokens_budget"] = old
+        if old_auto is not None:
+            st["max_tokens_budget_auto"] = old_auto
+
+
+def test_settings_budget_clamped_to_range(client) -> None:
+    """夹取：低于 12k 抬到 12k、高于 300k 压到 300k（防止设成 1k 直接不可用 / 设成 1M 爆成本）。"""
+    from papermate import runtime_settings
+
+    st = runtime_settings.get_state()
+    old, old_auto = st.get("max_tokens_budget"), st.get("max_tokens_budget_auto")
+    try:
+        assert client.put("/api/v1/settings", json={"max_tokens_budget": 1_000}).json()["max_tokens_budget"] == 12_000
+        assert client.put("/api/v1/settings", json={"max_tokens_budget": 999_999}).json()["max_tokens_budget"] == 300_000
+        assert client.put("/api/v1/settings", json={"max_tokens_budget": 300_000}).json()["max_tokens_budget"] == 300_000
+    finally:
+        if old is not None:
+            st["max_tokens_budget"] = old
+        if old_auto is not None:
+            st["max_tokens_budget_auto"] = old_auto
