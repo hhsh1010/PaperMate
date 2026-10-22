@@ -47,18 +47,6 @@
       "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },
       "nsis": {
         "displayLanguageSelector": true
-      },
-      "signCommand": {
-        "cmd": "powershell",
-        "args": [
-          "-NoProfile",
-          "-ExecutionPolicy",
-          "Bypass",
-          "-File",
-          "scripts/codesign.ps1",
-          "-FileToSign",
-          "%1"
-        ]
       }
     }
   },
