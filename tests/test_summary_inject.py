@@ -68,3 +68,12 @@ def test_narrative_clipped_and_marked_truncated() -> None:
 def test_non_dict_passthrough() -> None:
     assert _compact_summary_for_agent("原始字符串") == "原始字符串"
     assert _compact_summary_for_agent(None) is None
+
+
+def test_related_work_draft_kept() -> None:
+    """★ related_work 的主产物是 `draft` —— 压缩必须保留它（否则 KeyError: 'draft'）。"""
+    raw = {**_big(), "draft": "相关工作总结" * 1000}
+    out = _compact_summary_for_agent(raw)
+    assert "draft" in out
+    assert len(out["draft"]) <= 1201
+    assert out["doc_ids"] == raw["doc_ids"]        # 其它键也保留

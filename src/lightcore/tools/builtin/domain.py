@@ -373,6 +373,9 @@ def _compact_summary_for_agent(out: object, *, max_chars: int = _SUMMARY_INJECT_
     """
     if not isinstance(out, dict):
         return out
+    # ★ 保留**所有**原有键：`related_work` 的主产物是 `draft`（不是 sections/narrative），
+    #   若只挑几个键重建，会把 draft 整段丢掉（tests/test_phase_b.py::test_summary_tools_execute 当场抓到）。
+    compact = dict(out)
     sections = []
     for s in out.get("sections") or []:
         if isinstance(s, dict):
@@ -384,15 +387,16 @@ def _compact_summary_for_agent(out: object, *, max_chars: int = _SUMMARY_INJECT_
     for c in (out.get("citations") or [])[:3]:
         if isinstance(c, dict):
             cites.append({"filename": c.get("filename"), "page": c.get("page")})
-    compact = {
-        "doc_ids": out.get("doc_ids"),
+    compact.update({
         "sections": sections,
         "narrative": _clip(str(out.get("narrative") or ""), 800),
         "citations": cites,
-        "model": out.get("model"),
         "truncated": True,
         "note": "为节省上下文：sections 每段截 400 字、narrative 截 800 字、citations 只留 3 条；完整总结见右侧面板。",
-    }
+    })
+    # related_work 的主产物
+    if out.get("draft"):
+        compact["draft"] = _clip(str(out["draft"]), 1200)
     import json as _json
 
     if len(_json.dumps(compact, ensure_ascii=False)) > max_chars:   # 防御式兜底
