@@ -5926,8 +5926,10 @@ input, select, textarea { font-family: inherit; }
 .ctx-ring-btn.empty .ctx-ring-track { stroke: var(--border); }
 
 /* 面板：**向上**弹出（composer 在底部，向下会出界）*/
+/* ★ 2026-10-23：z-index 40 太低 —— 会被用户消息气泡/引用卡片盖住（实测截图：气泡压在面板上）。
+   浮层类组件统一用 --z-popover，避免各写一个数字。 */
 .ctx-panel {
-  position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 40;
+  position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 1000;
   width: 300px; padding: 14px 16px 12px;
   background: var(--surface); border: 1px solid var(--border-strong); border-radius: 14px;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
