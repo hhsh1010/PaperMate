@@ -794,7 +794,12 @@ export function SettingsPage() {
                 </span>
               </div>
               <label className="settings-field">
-                <span className="settings-label">{t("settings.apiKey")}</span>
+                            <p className="muted">
+              {lang === "zh"
+                ? "新建会话从这里取初值；「一键总结」「论文标题翻译」没有会话概念，也用这个模型。会话内对话与提示词增强优先用会话自己的模型。"
+                : "New sessions start from this model; session-less features (one-click summary, title translation) also use it. In-session chat and prompt enhancement prefer the session's own model."}
+            </p>
+<span className="settings-label">{t("settings.apiKey")}</span>
                 <input
                   className="settings-control" type="password" autoComplete="off" spellCheck={false}
                   placeholder={activePub?.configured ? "已保存，留空则不修改" : "粘贴你的 API Key"}

@@ -24,7 +24,13 @@ const DICT: Record<string, { zh: string; en: string }> = {
   "settings.testing": { zh: "测试中…", en: "Testing…" },
   "settings.save": { zh: "保存设置", en: "Save Settings" },
   "settings.saved": { zh: "已保存", en: "Saved" },
-  "settings.defaultModel": { zh: "全局默认模型", en: "Default Model" },
+  // ★ 2026-10-22：原名「全局默认模型」语义不清 —— 它其实承担**两件事**：
+  //   ① 新建会话的初始模型；② **无会话的功能**（一键总结 / 标题翻译）唯一可用的模型。
+  //   会话内的对话与提示词增强**永远优先用会话自己的模型**，不吃这个值。
+  "settings.defaultModel": {
+    zh: "默认模型（新会话 + 后台服务）",
+    en: "Default model (new sessions + background services)",
+  },
   "settings.apiKey": { zh: "API Key", en: "API Key" },
   "settings.baseUrl": { zh: "Base URL", en: "Base URL" },
   "settings.model": { zh: "模型", en: "Model" },
