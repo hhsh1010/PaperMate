@@ -497,7 +497,15 @@ class SummaryService:
                 ChatMessage(role=Role.USER, content=f"文档分块如下：\n{context}"),
             ], temperature=0.2)
             return resp.message.content
-        except Exception:  # noqa: BLE001  LLM 不可用 → 回退确定性
+        except Exception as e:  # noqa: BLE001  LLM 不可用 → 回退确定性
+            # ★ 必须留原因：否则用户只看到正文里的「（离线回退）」，无法判断是
+            #   额度耗尽（403）/ 限流（429）/ 超时 / 网络，还是模型根本不可用。
+            #   同一类"哑失败"在本项目已出现过三次（翻译字段、4xx detail、这里）。
+            import logging as _lg
+
+            _lg.getLogger(__name__).warning(
+                "[summary] narrative 生成失败，回退确定性结果：%s: %s", type(e).__name__, e
+            )
             return None
 
     # ---------- 对外接口 ----------
