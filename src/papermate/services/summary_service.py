@@ -222,7 +222,12 @@ def _build_llm(raw: str, settings: Settings):
 
 
 # S4 长上下文总结：优先用支持 ≥128K 上下文的模型，避免长文档被截断（docs/统一方案 §4）
-_LONG_CONTEXT_MODELS = {"qwen3-max", "qwen-long", "gpt-4o"}
+# ★ 2026-10-22：补上 DeepSeek。此前这里只有 Qwen/OpenAI，导致**选了 deepseek 的用户**
+#   在「一键总结」时被**静默切到 qwen3-max**（注释说"优先长上下文"，但用户没同意换厂商）
+#   ⇒ 百炼额度耗尽时表现为"（离线回退）"，而用户以为自己在用 DeepSeek，完全摸不着头脑。
+#   DeepSeek V4 本身就是 **1M** 窗口（比 qwen3-max 的 262K 还大），完全够用。
+_LONG_CONTEXT_MODELS = {"qwen3-max", "qwen-long", "gpt-4o",
+                        "deepseek-v4-flash", "deepseek-v4-flash-vision-exp"}
 
 
 def _long_context_llm(settings: Settings):
