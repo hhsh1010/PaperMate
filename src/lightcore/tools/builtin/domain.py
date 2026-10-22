@@ -354,6 +354,54 @@ def register_memory_tools(registry, memory, enabled: bool = True) -> None:
 
 
 # ---------------- S4：一键总结 ----------------
+#: 注入 Agent 上下文的一键总结上限（字符）。完整内容在侧栏（`POST /summary` 返回全量）。
+_SUMMARY_INJECT_MAX = 4000
+
+
+def _clip(text: str, n: int) -> str:
+    t = (text or "").strip().replace("\r", "")
+    return t if len(t) <= n else t[:n].rstrip() + "…"
+
+
+def _compact_summary_for_agent(out: object, *, max_chars: int = _SUMMARY_INJECT_MAX) -> object:
+    """把一键总结的完整结果**压到可注入上下文的大小**（纯函数，便于写判据）。
+
+    ★ 为什么必须压：`summarize` 返回的是 sections（确定性抽取，逐段接近原文）+ citations（每篇 240 字），
+      5 篇文档实测注入 **78323 字 ≈ 35k tokens** —— 比原文还长，把单次 prompt 从 21k 顶到 60k，
+      那一轮成本 ¥0.104（平时 ¥0.02~0.07）。它本该是"摘要"，却成了"整篇直灌"。
+    ★ 完整结果不受影响：UI 走 `/summary` 接口拿全量，这里只压"给模型看的那份"。
+    """
+    if not isinstance(out, dict):
+        return out
+    sections = []
+    for s in out.get("sections") or []:
+        if isinstance(s, dict):
+            sections.append({
+                "key": s.get("key"), "title": s.get("title"),
+                "content": _clip(str(s.get("content") or ""), 400),
+            })
+    cites = []
+    for c in (out.get("citations") or [])[:3]:
+        if isinstance(c, dict):
+            cites.append({"filename": c.get("filename"), "page": c.get("page")})
+    compact = {
+        "doc_ids": out.get("doc_ids"),
+        "sections": sections,
+        "narrative": _clip(str(out.get("narrative") or ""), 800),
+        "citations": cites,
+        "model": out.get("model"),
+        "truncated": True,
+        "note": "为节省上下文：sections 每段截 400 字、narrative 截 800 字、citations 只留 3 条；完整总结见右侧面板。",
+    }
+    import json as _json
+
+    if len(_json.dumps(compact, ensure_ascii=False)) > max_chars:   # 防御式兜底
+        compact["sections"] = sections[:2]
+        compact["narrative"] = _clip(str(compact["narrative"]), 300)
+    return compact
+
+
+
 def _make_summary_handler(summary_svc, kind: str, default_doc_ids):
     async def _fn(doc_ids: list[int] | None = None, lang: str = "zh") -> ToolResult:
         ids = doc_ids or default_doc_ids or []
@@ -369,7 +417,9 @@ def _make_summary_handler(summary_svc, kind: str, default_doc_ids):
                 out = await summary_svc.related_work(ids, lang=lang)
         except Exception as e:  # noqa: BLE001 工具失败需被 Agent 循环捕获
             return ToolResult(ok=False, output=None, error=f"{type(e).__name__}: {e}")
-        return ToolResult(ok=True, output={"kind": kind, "doc_ids": ids, "result": out})
+        # ★ 注入前压缩：否则一键总结会把整篇原文灌进上下文（实测 78323 字 ≫ 原文）
+        return ToolResult(ok=True, output={"kind": kind, "doc_ids": ids,
+                                           "result": _compact_summary_for_agent(out)})
 
     return _fn
 
