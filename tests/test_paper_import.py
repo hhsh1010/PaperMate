@@ -661,8 +661,16 @@ def test_translate_passes_chatmessage_objects(client, monkeypatch) -> None:
         async def chat(self, messages, **kw):  # noqa: ANN001, ANN003, ANN201
             seen["msgs"] = messages
             [m.to_openai() for m in messages]      # 复刻 router 的行为
-            from types import SimpleNamespace as NS
-            return NS(content='[{"i":1,"zh":"有向目标检测综述"}]')
+            # ★ 必须返回**真实结构** LLMResponse(message=ChatMessage(...))：
+            #   之前这里用 SimpleNamespace(content=…) 伪造了一个不存在的形状 ⇒
+            #   路由误写成 resp.content 也照样绿（线上就是因此空跑）✗
+            from lightcore.llm.base import ChatMessage as CM
+            from lightcore.llm.base import LLMResponse
+            from lightcore.llm.base import Role as R
+
+            return LLMResponse(
+                message=CM(role=R.ASSISTANT, content='[{"i":1,"zh":"有向目标检测综述"}]')
+            )
 
     st, old, _ = _with_model(client, monkeypatch, _LLM())
     try:

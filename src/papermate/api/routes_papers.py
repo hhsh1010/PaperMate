@@ -336,7 +336,16 @@ async def translate_paper_titles(payload: TranslateIn, request: Request) -> Tran
         logging.getLogger(__name__).warning("[paper_translate] 模型调用失败 → %s %s", code, msg)
         raise HTTPException(status_code=code, detail=msg) from e
 
-    raw = getattr(resp, "content", "") or ""
+    # ★ 内容在 `resp.message.content`（LLMResponse.message: ChatMessage）；
+    #   写 `resp.content` 会永远取到空串 —— 线上真的踩过（日志 raw=''）。
+    msg = getattr(resp, "message", None)
+    raw = getattr(msg, "content", "") or ""
+    if not raw:
+        # 思考型模型（如 qwen3 系）可能只吐 reasoning ⇒ 日志里区分开，便于判断是"解析"还是"模型没给内容"
+        reasoning = getattr(msg, "reasoning", "") or ""
+        logging.getLogger(__name__).warning(
+            "[paper_translate] 模型返回内容为空（message.content=''）· reasoning 长度=%d", len(reasoning)
+        )
     parsed = parse_titles_json(raw, len(items))
     if all(x is None for x in parsed):
         # ★ 必须把原始输出落到日志（截 500 字）：否则"无法解析"时**完全看不到模型说了什么**，
