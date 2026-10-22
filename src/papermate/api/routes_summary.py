@@ -36,8 +36,12 @@ async def summarize(body: SummaryRequest, request: Request) -> dict:
     if not body.doc_ids:
         raise HTTPException(status_code=400, detail="doc_ids 不能为空")
     svc = _get_svc(request)
+    # ★ 2026-10-22：带 session_id ⇒ 模型跟随会话所选（与对话/提示词增强同源）
+    model = None
+    if body.session_id is not None:
+        model = request.app.state.chat_svc._resolve_raw_model(body.session_id)
     try:
-        return await svc.summarize(body.doc_ids, lang=body.lang)
+        return await svc.summarize(body.doc_ids, lang=body.lang, model=model)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 

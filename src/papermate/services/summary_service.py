@@ -463,18 +463,23 @@ class SummaryService:
         return out
 
     # ---------- 有效模型解析（与 ChatService 一致：runtime_settings 优先于 config 默认）----------
-    def _effective_model(self) -> str:
+    def _effective_model(self, model: str | None = None) -> str:
         """解析实际使用的模型描述符。
 
         必须读 runtime_settings.get_state()['default_model']（设置页持久化的那份），
         回退到 settings.default_model（仅受 PAPERMATE_DEFAULT_MODEL 环境变量影响）。
         否则在设置页配了 DeepSeek 也被忽略，技能永远走离线确定性回退。
         """
+        # ★ 2026-10-22：会话内触发时由路由传入**该会话的模型**，优先级最高；
+        #   未传（无会话场景：文档页的一键总结）才回落到全局默认。
+        if model:
+            return model
         return runtime_settings.get_state().get("default_model") or self._settings.default_model
 
     # ---------- LLM 增强（可选）----------
-    async def _via_llm(self, chunks: list[dict[str, Any]], kind: str, lang: str = "zh") -> dict[str, Any] | None:
-        llm, provider = _build_llm(self._effective_model(), self._settings)
+    async def _via_llm(self, chunks: list[dict[str, Any]], kind: str, lang: str = "zh",
+                       model: str | None = None) -> dict[str, Any] | None:
+        llm, provider = _build_llm(self._effective_model(model), self._settings)
         if provider == "fake":
             return None  # 离线环境退化到确定性结果
         # S4：总结（相对相关工作更吃上下文）优先路由到长上下文模型（如 Qwen3-Max 262K）
@@ -514,7 +519,8 @@ class SummaryService:
             return None
 
     # ---------- 对外接口 ----------
-    async def summarize(self, doc_ids: list[int], lang: str = "zh") -> dict[str, Any]:
+    async def summarize(self, doc_ids: list[int], lang: str = "zh",
+                     model: str | None = None) -> dict[str, Any]:
         chunks = self._gather_chunks(doc_ids)
         if not chunks:
             raise ValueError("未找到可总结的文档块；请先上传并完成处理的文档。")
@@ -532,7 +538,7 @@ class SummaryService:
                               "chunk_id": key, "page": normalize_page(c.get("page")),
                               "text": _truncate_at_sentence(self._clean_text(c["text"]), 240)})
 
-        narrative = await self._via_llm(chunks, "summary", lang)
+        narrative = await self._via_llm(chunks, "summary", lang, model)
         out: dict[str, Any] = {
             "doc_ids": doc_ids,
             "sections": [{"key": k, "title": _SECTION_TITLES[k], "content": det[k]} for k in _SECTION_TITLES],
@@ -542,7 +548,8 @@ class SummaryService:
         }
         return out
 
-    async def related_work(self, doc_ids: list[int], lang: str = "zh") -> dict[str, Any]:
+    async def related_work(self, doc_ids: list[int], lang: str = "zh",
+                     model: str | None = None) -> dict[str, Any]:
         chunks = self._gather_chunks(doc_ids)
         if not chunks:
             raise ValueError("未找到可分析的文档块；请先上传并完成处理的文档。")
@@ -557,7 +564,7 @@ class SummaryService:
             citations.append({"doc_id": c["doc_id"], "filename": c["filename"],
                               "chunk_id": key, "page": normalize_page(c.get("page")),
                               "text": _truncate_at_sentence(self._clean_text(c["text"]), 240)})
-        narrative = await self._via_llm(chunks, "related_work", lang)
+        narrative = await self._via_llm(chunks, "related_work", lang, model)
         out: dict[str, Any] = {
             "doc_ids": doc_ids,
             "draft": narrative or det["draft"],
@@ -568,7 +575,8 @@ class SummaryService:
         return out
 
     # ---------- S5：多篇文档对比 ----------
-    async def compare(self, doc_ids: list[int], lang: str = "zh") -> dict[str, Any]:
+    async def compare(self, doc_ids: list[int], lang: str = "zh",
+                     model: str | None = None) -> dict[str, Any]:
         """多篇文档对比：逐篇五段式归纳 + 按维度并列对比表 + 共性/差异叙述 + 共引分析。
 
         确定性回退保证无 key 可用；LLM 增强生成对比叙述（差异/共性），解析失败自动回退。
@@ -609,7 +617,7 @@ class SummaryService:
         # （绝不中断、绝不臆造内容之外的数据，2026-08-29）。
         narrative: str | None = None
         llm_cells: dict[str, dict[str, str]] = {}
-        llm, provider = _build_llm(self._effective_model(), self._settings)
+        llm, provider = _build_llm(self._effective_model(model), self._settings)
         if provider != "fake":
             brief = "\n\n".join(
                 f"### {d['label']}\n"

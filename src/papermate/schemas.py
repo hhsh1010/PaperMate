@@ -206,6 +206,8 @@ class SearchRequest(BaseModel):
 class SummaryRequest(BaseModel):
     doc_ids: list[int]
     lang: str = "zh"
+    # ★ 2026-10-22：从会话内触发时带上会话 id ⇒ 模型跟随会话所选（此前只能读全局默认）
+    session_id: int | None = None
 
 
 class UsageRow(BaseModel):
