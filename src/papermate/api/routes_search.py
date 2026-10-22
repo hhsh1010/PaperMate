@@ -1606,9 +1606,16 @@ async def stream_message(session_id: int, body: ChatRequest, request: Request) -
             if recorder is not None and recorder.peak_prompt_tokens > 0:
                 _ctx_payload = {
                     "peak_prompt_tokens": recorder.peak_prompt_tokens,
-                    # 与普通路径同源：AgentLoop 用 config.max_tokens_budget；技能路径从
-                    # runtime_settings 取（同口径，见 routes_metrics.py:176 的说明）。
-                    "max_tokens_budget": runtime_settings.get_state().get("max_tokens_budget"),
+                    # ★★ 2026-10-23：这里原来直接取 `get_state()["max_tokens_budget"]`（原始 30000），
+                    #   而普通路径的 AgentLoop 用的是**解析后**的预算（`resolve_budget_for(model)`，
+                    #   按模型窗口 auto 推算，deepseek 1M ⇒ 100000）。
+                    #   ⇒ 同一份"预算"在两条路径上取值不同 = **第三把尺子** ✗
+                    #   表现：技能轮里面板显示 `2.7K / 30K = 9.0%`，而真实是 `2.7K / 100K = 2.7%`
+                    #   （用户会误以为上下文快满了）。
+                    #   现在统一走 resolve_budget_for，未登记模型时它自己回落原始值，口径一致。
+                    "max_tokens_budget": runtime_settings.resolve_budget_for(
+                        runtime_settings.get_state().get("default_model")
+                    ),
                 }
             # 2026-09-07 修复：持久化用 user_content（含多模态图片块）而非 body.content 纯文本，
             # 否则走技能路径（/总结 /对比 等）时用户随消息发送的图片不会写入历史，
