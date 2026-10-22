@@ -1,7 +1,7 @@
 {
   "name": "papermate-web",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "type": "module",
   "description": "PaperMate 论文智友 · React 前端（M3.2，docs/04 §4.4）",
   "scripts": {

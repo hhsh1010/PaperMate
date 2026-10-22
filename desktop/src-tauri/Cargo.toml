@@ -1,6 +1,6 @@
 [package]
 name = "papermate-desktop"
-version = "0.1.1"
+version = "0.1.2"
 description = "PaperMate 本地桌面客户端（Tauri 2 壳 + Python sidecar）"
 authors = ["PaperMate"]
 edition = "2021"
