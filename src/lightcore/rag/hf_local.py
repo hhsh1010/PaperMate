@@ -20,6 +20,7 @@ from __future__ import annotations
 import glob
 import logging
 import os
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -41,11 +42,41 @@ def ensure_hf_mirror() -> None:
     logger.info("HF_ENDPOINT 未设置，已兜底为国内镜像 %s", _DEFAULT_HF_MIRROR)
 
 
+def _arch_supported(capability: tuple[int, int], arch_list: list[str]) -> bool:
+    """这颗 GPU 的计算能力 (major, minor) 是否被当前 torch **编译**进去了。
+
+    ★★ 为什么必须查这个：`torch.cuda.is_available()` 只回答"**驱动在不在**"，
+       不回答"**这颗卡的 kernel 有没有被编进去**"。
+       反例（2026-10-22 真实用户，RTX 5060 = Blackwell `sm_120`）：
+       `torch 2.13.0+cu126` 的 `get_arch_list()` 只有 sm_50/60/61/70/75/80/86/90
+       ⇒ `is_available()` 返回 True，嵌入/重排初始化也"成功"，
+       但**第一次推理**就 `CUDA error: no kernel image is available for execution on the device`
+       ⇒ 异常没人接 ⇒ 对话接口 500。属于典型的「能力存在 ≠ 能力可用」。
+    """
+    major, minor = capability
+    for a in arch_list:
+        # sm_86 / sm_90a / sm_120 → (major, minor)
+        m = re.match(r"sm_(\d+)(\d)", a)  # 贪婪：major 吃掉最后一位之前的所有数字
+        if not m:
+            continue
+        a_major, a_minor = int(m.group(1)), int(m.group(2))
+        # ★ CUDA 的兼容规则：**同一 major、且编进去的 minor ≤ 目标 minor ⇒ 可运行**。
+        #   实测：本机 sm_89（RTX 40 系）在只有 sm_86 kernel 的 torch 上照常跑（日志 device=cuda ✓）；
+        #   若写成"必须完全相等"，会把这类机器误判成不支持而强制 CPU ✗。
+        #   跨 major（如 Blackwell sm_120 vs 最高 sm_90）**不兼容** ⇒ 返回 False（真实 500 的根因）。
+        if a_major == major and a_minor <= minor:
+            return True
+    return False
+
+
 def auto_device() -> str:
-    """探测推理设备：env ``PAPERMATE_DEVICE`` 显式指定 > torch.cuda 可用则 ``cuda`` > ``cpu``。
+    """探测推理设备：env ``PAPERMATE_DEVICE`` > **CUDA 可用且架构受支持** > ``cpu``。
 
     torch 未安装 / 探测失败一律安全回退 ``cpu``（嵌入/重排在无 torch 环境本就不可用，
     此处不抛错以保证调用方可统一走探测-降级路径）。
+
+    ★ 2026-10-22：仅 `is_available()` 不够 —— 还要求这台机器的 sm 架构在
+      `torch.cuda.get_arch_list()` 里，否则会在推理时才炸（详见 `_arch_supported`）。
     """
     env = os.environ.get("PAPERMATE_DEVICE", "").strip().lower()
     if env:
@@ -53,7 +84,21 @@ def auto_device() -> str:
     try:
         import torch  # 惰性导入：非 rag 环境不引入重依赖
 
-        return "cuda" if torch.cuda.is_available() else "cpu"
+        if not torch.cuda.is_available():
+            return "cpu"
+        try:
+            cap = torch.cuda.get_device_capability(0)
+            archs = list(torch.cuda.get_arch_list())
+        except Exception:  # noqa: BLE001  探测不到就保守走 CPU
+            return "cpu"
+        if not _arch_supported(cap, archs):
+            logger.warning(
+                "GPU 计算能力 sm_%d%d 不在当前 torch 支持的架构 %s 中 ⇒ 回退 CPU"
+                "（否则推理时会报 'no kernel image is available'）",
+                cap[0], cap[1], archs,
+            )
+            return "cpu"
+        return "cuda"
     except Exception:  # noqa: BLE001  探测属加速手段，失败不影响主流程
         return "cpu"
 

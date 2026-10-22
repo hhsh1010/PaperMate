@@ -126,3 +126,49 @@ class TestCrossEncoderRerankerDevice:
         r = CrossEncoderReranker(model_name="/fake/path")
         assert r.device == "cpu"
         assert _FakeCrossEncoder.last_kwargs["device"] == "cpu"
+
+
+class TestArchSupported:
+    """★ 2026-10-22：RTX 5060（Blackwell sm_120）在 torch+cu126 上 is_available()=True
+    但**没有 kernel** ⇒ 推理时报 no kernel image ⇒ 对话 500。这里把判据钉死。
+    """
+
+    #: 本机 torch 2.13.0+cu126 的真实列表
+    CU126 = ["sm_50", "sm_60", "sm_61", "sm_70", "sm_75", "sm_80", "sm_86", "sm_90"]
+
+    def test_supported_arch_returns_true(self):
+        from lightcore.rag.hf_local import _arch_supported
+
+        assert _arch_supported((8, 6), self.CU126) is True
+        assert _arch_supported((9, 0), self.CU126) is True
+
+    def test_same_major_minor_forward_compatible(self):
+        """★ sm_89（RTX 40 系）在只有 sm_86 kernel 的 torch 上**能跑**（真实机器验证过）。
+        判据必须是「同 major 且 minor ≤」而不是「完全相等」，否则会把这类机器误判成不支持 ✗。
+        """
+        from lightcore.rag.hf_local import _arch_supported
+
+        assert _arch_supported((8, 9), self.CU126) is True
+
+    def test_rtx50_sm120_not_supported_by_cu126(self):
+        """★ 真实故障：sm_120 不在 cu126 的列表里 ⇒ 必须判 False（从而回退 CPU）。"""
+        from lightcore.rag.hf_local import _arch_supported
+
+        assert _arch_supported((12, 0), self.CU126) is False
+
+    def test_too_old_arch_also_false(self):
+        from lightcore.rag.hf_local import _arch_supported
+
+        assert _arch_supported((3, 5), self.CU126) is False
+
+    def test_arch_suffix_tolerated(self):
+        """sm_90a 这类带后缀的条目要能匹配 sm_90。"""
+        from lightcore.rag.hf_local import _arch_supported
+
+        assert _arch_supported((9, 0), ["sm_90a"]) is True
+
+    def test_new_torch_supports_sm120(self):
+        """将来换 cu128（含 sm_120）时自动放行，不用再改代码。"""
+        from lightcore.rag.hf_local import _arch_supported
+
+        assert _arch_supported((12, 0), [*self.CU126, "sm_120"]) is True
