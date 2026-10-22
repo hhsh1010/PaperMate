@@ -37,7 +37,7 @@ rag = [
     "sentence-transformers>=2.7,<4", # 仅用于 BGE-reranker 重排（CrossEncoder），不用于 BGE-M3 嵌入
     "pymupdf>=1.24",                # PDF 解析（M3 解析阶段）
     "jieba>=0.42",                  # BM25 词级分词：中文按词切分；英文保留整词（修复字符级下英文 BM25 召回弱）。use_jieba 默认开，未装则自动回退字符级。
-    "torch==2.13.0+cu126",         # GPU 构建（RTX 4070 / CUDA 12.4）。PyPI Windows 版恒 CPU-only，必须走 pytorch 官方 cu126 源——见下方 [tool.uv.sources]。
+    "torch==2.13.0+cu129",         # GPU 构建（CUDA 12.9 源；含 Blackwell sm_120，兼容 RTX 50 系）。PyPI Windows 版恒 CPU-only，必须走 pytorch 官方 cu129 源——见下方 [tool.uv.sources]。
 ]
 # 图片内容增强（ER-03 Level 2）：OCR / 表格结构还原 / VLM 图注。
 # 与 rag 分离，避免拖重核心 RAG 安装；启用 figure_enrich 前才需安装。
@@ -161,18 +161,18 @@ markers = [
 #      把 2989 处 URL 又改回去 ⇒ 反复产生大规模 diff churn。
 #   ⚠️ 代价：把国内镜像固化进仓库 —— 境外用户会变慢（镜像全球可达，仍可用）。
 #      需要临时走官方源：`UV_DEFAULT_INDEX=https://pypi.org/simple uv lock`（会再次重写 lock）。
-#   ★ torch 不受影响：它走下面 explicit 的 pytorch 官方 cu126 源。
+#   ★ torch 不受影响：它走下面 explicit 的 pytorch 官方 cu129 源。
 [[tool.uv.index]]
 name = "tuna"
 url = "https://pypi.tuna.tsinghua.edu.cn/simple"
 default = true
 
-# torch GPU 构建锁定：PyPI 的 Windows torch 恒为 CPU-only，GPU 轮子只在 pytorch 官方 cu126 源。
-# 用 explicit index + source 重定向，使 `uv sync` 自动从 cu126 源拉 GPU 构建，避免被换回 CPU 版。
+# torch GPU 构建锁定：PyPI 的 Windows torch 恒为 CPU-only，GPU 轮子只在 pytorch 官方 cu129 源。
+# 用 explicit index + source 重定向，使 `uv sync` 自动从 cu129 源拉 GPU 构建，避免被换回 CPU 版。
 [[tool.uv.index]]
-name = "pytorch-cu126"
-url = "https://download.pytorch.org/whl/cu126"
+name = "pytorch-cu129"
+url = "https://download.pytorch.org/whl/cu129"
 explicit = true
 
 [tool.uv.sources]
-torch = [{ index = "pytorch-cu126" }]
+torch = [{ index = "pytorch-cu129" }]
