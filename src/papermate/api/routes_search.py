@@ -1508,7 +1508,9 @@ async def stream_message(session_id: int, body: ChatRequest, request: Request) -
             #   这里先推一条 **progress** 让前端立刻显示"正在执行 /综述…"，至少不是空白。
             #   真正的"逐段进度"需要把 12 个技能改成生成器（另立任务）。
             yield sse_event("progress", {
-                "stage": "running_skill",
+                # ★ 前端 reducer 读的是 `phase` + `text`（`web/src/lib/reducer.ts:31`，O-12 首字前进度）
+                #   ⇒ 字段名必须对齐，否则只会显示空 phase。
+                "phase": "running_skill",
                 "skill": getattr(skill, "name", type(skill).__name__),
                 "text": f"正在执行 /{getattr(skill, 'name', '技能')}…",
             })
