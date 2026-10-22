@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import logging
 
 from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
@@ -207,4 +208,17 @@ class SessionService:
                     history.append(ChatMessage(role=Role.ASSISTANT, content=content, tool_calls=calls))
                 else:
                     history.append(ChatMessage(role=role, content=content))
+            # ★ 2026-10-22 诊断（只读日志、不改行为）：把"重建出来的历史"按角色拆开，
+            #   专答"上下文为什么变小"——重点看**工具消息字数**与**最长一条**。
+            #   若这里看到很大的工具消息、而那一轮 prompt 很小 ⇒ 说明是别处丢的。
+            _lg = logging.getLogger(__name__)
+            if _lg.isEnabledFor(logging.INFO):
+                _tools = [m for m in history if m.role == Role.TOOL]
+                _all = sum(len(m.content) for m in history if isinstance(m.content, str))
+                _tchars = sum(len(m.content) for m in _tools if isinstance(m.content, str))
+                _longest = max((len(m.content) for m in _tools if isinstance(m.content, str)), default=0)
+                _lg.info(
+                    "[上下文诊断] session=%s 重建 %d 条历史（工具 %d 条 / %d 字；全部 %d 字；最长工具 %d 字）",
+                    session_id, len(history), len(_tools), _tchars, _all, _longest,
+                )
             return history
