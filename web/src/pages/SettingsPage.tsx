@@ -594,7 +594,7 @@ export function SettingsPage() {
           ? `✅ 大模型联网可用 · ${r.model ?? ""}：${(r.reply ?? "").slice(0, 48)}`
           : r.supported
             ? `❌ 实测失败：${r.error ?? "未知错误"}`
-            : `⚠️ 当前厂商/模型不支持原生联网搜索：${r.error ?? ""}（请到「默认模型」切换为 Qwen 后再开启联网）`,
+            : `⚠️ 当前厂商/模型不支持原生联网搜索：${r.error ?? ""}（请到「默认模型（新会话 + 后台服务）」切换为 Qwen 后再开启联网）`,
       });
     } catch (e: unknown) {
       setWebSearchRes({ ok: false, msg: `❌ 测试异常：${toErrorMessage(e) || "未知错误"}` });
@@ -767,6 +767,11 @@ export function SettingsPage() {
                   <option key={m} value={m}>{m === "fake" ? "fake（本地演示）" : m}</option>
                 ))}
               </select>
+              <p className="muted">
+                {lang === "zh"
+                  ? "这是新会话的初始模型；同时，「标题翻译」「一键总结」这类没有会话的后台服务也用它（它们拿不到会话 id，只能读这个默认值）。会话内对话与提示词增强则跟随会话自己选的模型。"
+                  : "Initial model for new sessions. It is also used by session-less services such as title translation and one-click summary (they have no session id). In-session chat and prompt enhancement follow the session's own model."}
+              </p>
             </label>
 
             <div className="settings-tabs" role="tablist" aria-label="厂商">
@@ -1056,7 +1061,7 @@ export function SettingsPage() {
               <div className="wb-card-row">
                 <div className="wb-card-row-main">
                   <div className="wb-card-row-title">模型</div>
-                  <div className="wb-card-row-desc">本会话使用的模型（优先级高于「模型与厂商 → 默认模型」）</div>
+                  <div className="wb-card-row-desc">本会话使用的模型（优先级高于「模型与厂商 → 默认模型（新会话 + 后台服务）」）</div>
                 </div>
                 <div className="wb-card-row-control">
                   <select className="settings-control" value={model} onChange={(e) => setModel(e.target.value)}>
