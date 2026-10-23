@@ -5979,6 +5979,17 @@ input, select, textarea { font-family: inherit; }
   background: var(--surface-2); border-radius: 999px; overflow: hidden;
 }
 .ctx-panel-seg { height: 100%; border-radius: 2px; min-width: 2px; }
+.ctx-panel-total {
+  margin: 8px 0 2px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+  font-size: 12px;
+  color: var(--text-2);
+  line-height: 1.5;
+}
+.ctx-panel-total b { color: var(--text-1); font-weight: 600; }
+.ctx-panel-total-sep { margin: 0 6px; opacity: .5; }
+
 .ctx-panel-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .ctx-panel-item { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
 .ctx-panel-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }

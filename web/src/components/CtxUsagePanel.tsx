@@ -3,6 +3,8 @@ import { Icons } from "../lib/icons";
 import { buildCtxPanel, fmtTokens } from "../lib/ctxBreakdown";
 import { ringSegments } from "../lib/ctxRing";
 import { barSegments } from "../lib/ctxBar";
+import { api } from "../api/client";
+import type { UsageRow } from "../lib/types";
 
 /** composer 小圆环按钮的半径（viewBox 32×32，与工具条控件等高）。 */
 const RING_BTN_R = 13;
@@ -28,6 +30,7 @@ export function CtxUsageBar({
   placement = "up",
   compact = false,
   variant = "bar",
+  sessionId,
 }: {
   peak?: number;
   budget?: number;
@@ -40,9 +43,31 @@ export function CtxUsageBar({
   compact?: boolean;
   /** 触发形态：`bar` = 带文字的横条；`ring` = **小圆环**（composer 用，省横向空间）。 */
   variant?: "bar" | "ring";
+  /** ★ 2026-10-23：会话 id。传了就在面板里显示**整个对话的累计用量**
+   *  （取 `GET /usage` 的聚合行；不传则只显示本轮，老调用方零影响）。 */
+  sessionId?: number;
 }) {
   const [open, setOpen] = useState(false);
+  // ★ 整个对话的累计用量（懒加载：只在面板展开时拉，且失败静默降级）
+  const [sessionUsage, setSessionUsage] = useState<UsageRow | null>(null);
   const anchorRef = useRef<HTMLSpanElement | null>(null);
+
+  useEffect(() => {
+    if (!open || !sessionId) return;
+    let alive = true;
+    void (async () => {
+      try {
+        const rows = await api.getUsage();
+        const row = rows.find((r) => r.session_id === sessionId) ?? null;
+        if (alive) setSessionUsage(row);
+      } catch {
+        /* 老后端 / 接口异常：不显示累计即可，绝不让面板整体报错 */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [open, sessionId]);
   const data = buildCtxPanel(peak, budget, warnAt, breakdown);
 
   // 点外部 / Esc 关闭（与项目其它浮层交互一致）
@@ -171,6 +196,24 @@ export function CtxUsageBar({
               已使用 {fmtTokens(data.used)}/ {fmtTokens(data.total)}
             </span>
           </div>
+
+          {/* ★ 2026-10-23（用户："上下文用量要求显示整个对话的用量"）：
+              上面的「已使用」是**本轮峰值**（当前上下文有多满），这里才是**整个对话累计**。
+              ⚠️ 两者含义完全不同 —— 不能相加、不能互换：
+                · 本轮峰值 ≈ 历史 + 本轮工具结果（受上下文窗口约束，会随历史变长而变大）；
+                · 累计 = 所有轮次 prompt+completion 之和（成本口径，只增不减）。 */}
+          {sessionUsage && (
+            <div
+              className="ctx-panel-total"
+              title="整个对话的累计消耗（成本口径，只增不减）；与上面的「已使用」不是同一个概念"
+            >
+              会话累计{" "}
+              <b>{fmtTokens(sessionUsage.prompt_tokens + sessionUsage.completion_tokens)}</b> tokens
+              <span className="ctx-panel-total-sep">·</span>
+              {sessionUsage.num_messages} 条消息
+              <span className="ctx-panel-total-sep">·</span>¥{sessionUsage.cost.toFixed(2)}
+            </div>
+          )}
 
           {/* ★ 2026-10-03（用户："面板换成横条统计"）：**底槽 + 多色分段**。
               底槽 = 100%（总容量），分段宽度 = 分项占比 × 占用率（`barSegments` 已算好，

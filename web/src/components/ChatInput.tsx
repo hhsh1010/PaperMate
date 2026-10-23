@@ -732,6 +732,7 @@ export function ChatInput({
             warnAt={ctxUsage?.warnAt}
             breakdown={ctxUsage?.breakdown}
             variant="ring"
+            sessionId={sessionId}
           />
 
           {skills && skills.length > 0 && (
