@@ -77,6 +77,40 @@ def usage(request: Request) -> list[UsageRow]:
             model=cfg.get("model") or default_model,
             last_at=iso_utc(u.get("last_at")),
         ))
+
+    # ★★ 2026-10-23：把「服务类调用」也汇总进来。
+    #   翻译/总结/提示词增强**没有会话**，此前完全不记账 ⇒ `/usage` 的总额是**黑账** ✗
+    #   现按总量汇总成一行（session_id 用 -1 作哨兵，title 明示来源）。
+    #   ⚠️ 用 -1 而不是 0/NULL：前端按 session_id 匹配会话，负数不会撞上任何真实会话。
+    try:
+        from sqlalchemy import func
+
+        from ..models.db import ServiceUsage
+
+        with chat_svc._Session() as db:  # noqa: SLF001  与 chat_svc 共用同一 sessionmaker
+            agg = db.query(
+                func.coalesce(func.sum(ServiceUsage.prompt_tokens), 0),
+                func.coalesce(func.sum(ServiceUsage.completion_tokens), 0),
+                func.coalesce(func.sum(ServiceUsage.cost), 0.0),
+                func.count(ServiceUsage.id),
+                func.max(ServiceUsage.created_at),
+            ).one()
+        if int(agg[3] or 0) > 0:  # 没有服务调用就不出这行，避免界面上多一条 0
+            rows.append(UsageRow(
+                session_id=-1,
+                title="服务调用（翻译 / 总结 / 提示词增强）",
+                num_messages=int(agg[3]),
+                num_tool_runs=0,
+                prompt_tokens=int(agg[0]),
+                completion_tokens=int(agg[1]),
+                cost=float(agg[2]),
+                model="(多个)",
+                last_at=iso_utc(agg[4]),
+            ))
+    except Exception:  # noqa: BLE001  聚合失败不能拖垮整页
+        import logging as _lg
+
+        _lg.getLogger(__name__).warning("[usage] 服务调用汇总失败", exc_info=True)
     return rows
 
 

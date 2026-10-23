@@ -506,6 +506,11 @@ class SummaryService:
                 ChatMessage(role=Role.SYSTEM, content=sys),
                 ChatMessage(role=Role.USER, content=f"文档分块如下：\n{context}"),
             ], temperature=0.2)
+            # ★ 2026-10-23：服务类调用统一记账（source 用 kind 区分 summary/related_work/compare）
+            from .usage_service import record_service_usage
+
+            record_service_usage(self._Session, source=kind, model=self._effective_model(model),
+                                 response=resp)
             return resp.message.content
         except Exception as e:  # noqa: BLE001  LLM 不可用 → 回退确定性
             # ★ 必须留原因：否则用户只看到正文里的「（离线回退）」，无法判断是

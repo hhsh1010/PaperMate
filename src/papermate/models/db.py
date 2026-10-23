@@ -87,6 +87,28 @@ class Message(Base):
     session = relationship("ChatSession", back_populates="messages")
 
 
+class ServiceUsage(Base):
+    """**无会话**的服务类 LLM 调用计费记录（2026-10-23）。
+
+    为什么单独建表、不复用 `messages`：`Message.session_id` 是 **NOT NULL + 外键**
+    ⇒ 服务调用（翻译/总结/提示词增强）没有会话，塞进去要么违反约束、要么改列（SQLite 需重建整表）✗
+    ⇒ 新表**无外键**，`create_all()` 直接建出来，**不动任何既有数据** ✓
+
+    `source` 取值：`translate_titles` / `summary` / `related_work` / `compare` / `prompt_enhance`
+    （当前只做**总量**统计，保留该字段以便将来按功能查看）
+    """
+
+    __tablename__ = "service_usage"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source = Column(String, nullable=False, default="")
+    model = Column(String, nullable=False, default="")
+    prompt_tokens = Column(Integer, nullable=False, default=0)
+    completion_tokens = Column(Integer, nullable=False, default=0)
+    cost = Column(Float, nullable=False, default=0.0)
+    created_at = Column(DateTime(timezone=True), default=_now)
+
+
 class Document(Base):
     __tablename__ = "documents"
 
