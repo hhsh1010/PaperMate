@@ -55,8 +55,15 @@ class TestPersistWiring:
         会被 `0` 短路，把"无数据"显示成 0%。
         """
         assert "**_ctx_payload," in src, "技能轮 done 没带上下文占用"
-        assert "if recorder is not None and recorder.peak_prompt_tokens > 0:" in src, (
-            "注入必须条件化（peak>0），否则前端会把「无数据」当 0% 渲染"
+        # ★ 2026-10-23 契约变更：技能轮**不再上报 ctx**。
+        #   原因：recorder.peak_prompt_tokens 记的是"技能内部那次 LLM 调用"的 prompt
+        #   （实测 456 tokens），不是会话上下文 ⇒ 面板会显示 `456 / 100K = 0.0%`，
+        #   用户以为上下文归零 ✗。改为不提供该字段，前端自然回落到上一轮。
+        assert "_ctx_payload: dict = {}" in src, (
+            "技能轮应保持 _ctx_payload 为空（见 2026-10-23：ctx 在技能路径上语义不成立）"
+        )
+        assert "recorder.peak_prompt_tokens > 0" not in src, (
+            "不应再把技能内部 prompt 当作上下文占用上报"
         )
         # 旧接线必须绝迹：events 收集器在技能分支恒为空 ⇒ 再接它等于接了空
         assert "ctx=_ctx_usage_from_events(events)" not in src, (

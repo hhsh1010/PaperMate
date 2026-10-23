@@ -123,13 +123,15 @@ async def enhance_prompt(body: PromptEnhanceRequest, request: Request) -> dict:
         raw = (getattr(resp, "message", None) and resp.message.content) or ""
     except Exception as e:  # noqa: BLE001  调用异常：降级原文，绝不 500 阻断
         logger.warning("提示词增强调用失败，降级返回原文：%s", e)
-        # ★ 2026-10-23：服务类调用统一记账
-        from ..services.usage_service import record_service_usage
-
-        record_service_usage(request.app.state.chat_svc._Session, source="prompt_enhance",
-                             model=getattr(llm, 'model', ''), response=resp)
         return {"original": text, "enhanced": text, "applied": False, "reason": "调用失败，请重试"}
 
+    # ★ 2026-10-23：服务类调用统一记账（★ 必须在**成功路径**：失败分支没有 resp）
+    from ..services.usage_service import record_service_usage
+
+    _sess = getattr(request.app.state.chat_svc, "_Session", None)
+    if _sess is not None:
+        record_service_usage(_sess, source="prompt_enhance",
+                             model=getattr(llm, "model", ""), response=resp)
     enhanced = extract_enhanced(raw, fallback=text)
     applied = bool(enhanced) and enhanced != text
     return {"original": text, "enhanced": enhanced, "applied": applied, "reason": None}

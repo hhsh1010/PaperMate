@@ -341,8 +341,9 @@ async def translate_paper_titles(payload: TranslateIn, request: Request) -> Tran
     # ★ 2026-10-23：服务类调用统一记账（此前完全没记 ⇒ 黑账）
     from ..services.usage_service import record_service_usage
 
-    record_service_usage(request.app.state.chat_svc._Session, source="translate_titles",
-                         model=model, response=resp)
+    _sess = getattr(request.app.state.chat_svc, "_Session", None)
+    if _sess is not None:
+        record_service_usage(_sess, source="translate_titles", model=model, response=resp)
     msg = getattr(resp, "message", None)
     raw = getattr(msg, "content", "") or ""
     if not raw:
