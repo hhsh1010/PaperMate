@@ -308,6 +308,17 @@ else{{document.body.innerHTML='<pre style=\"color:#ff8f8f;padding:24px;white-spa
 ///   **无法在无 GUI 环境验证**；一旦被拦，症状是"永远转圈"，比现状更糟。
 ///   ⇒ 就绪信号改由**知道真相的一侧**（本进程）给出：后端是我们自己 spawn 的，端口通了就是通了。
 ///   页面的 `no-cors` 探测仅作**兜底**（万一 `eval` 没生效），两者不冲突。
+/// 端口是否已被占用（★ 2026-10-23：P0 移植性问题）。
+///
+/// 为什么需要：`PORT` 是**写死 8000** 的，而窗口 origin 与 CSP/代理规则都按它固定，
+/// 不能简单改成动态端口。但目标机器上 8000 可能被别的程序占用（今天就踩过：
+/// dev 后端 + 桌面版互相抢），此时后端 `bind` 失败（`[Errno 10048]`），
+/// 而用户看到的是"窗口一直转圈"—— **零提示、无法自救** ✗
+/// ⇒ 启动前先探测，被占就弹**明确对话框**，用户关掉占用的程序后自动重试。
+fn port_in_use(port: u16) -> bool {
+    std::net::TcpListener::bind(("127.0.0.1", port)).is_err()
+}
+
 fn navigate_when_backend_ready(app: tauri::AppHandle, port: u16) {
     let addr = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port));
     let deadline = std::time::Instant::now() + READY_TIMEOUT;
@@ -1068,6 +1079,41 @@ fn bootstrap_and_spawn(app: &tauri::AppHandle) {
     //   `tauri.conf.json` 的 `windows[0].url` 创建好了**（`app.rs::setup` 里先建窗口、
     //   再跑用户的 setup 闭包）。所以窗口此刻显示的是**包内的本地等待页**（`loading.html`），
     //   需要我们在后端就绪后**主动把它导航**到真实 UI —— 见 `navigate_when_backend_ready`。
+    // ★ 2026-10-23 P0：端口占用必须有**明确提示**（此前是静默重试 ⇒ 用户只看到转圈）
+    {
+        use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+
+        let mut ok = !port_in_use(PORT);
+        for attempt in 1..=3 {
+            if ok {
+                break;
+            }
+            let msg = format!(
+                "端口 {} 已被其他程序占用，PaperMate 无法启动后端。\n\n\
+                 常见原因：\n\
+                 · 另一个 PaperMate 窗口没关干净\n\
+                 · 你自己开着一个开发用的后端（python -m papermate.api）\n\
+                 · 其他软件占用了 {} 端口\n\n\
+                 请关闭占用的程序后点「重试」。\n（第 {} / 3 次）",
+                PORT, PORT, attempt
+            );
+            app.dialog()
+                .message(msg)
+                .title("PaperMate 启动失败：端口被占用")
+                .kind(MessageDialogKind::Error)
+                .buttons(MessageDialogButtons::OkCancelCustom(
+                    "重试".to_string(),
+                    "退出".to_string(),
+                ))
+                .blocking_show();
+            ok = !port_in_use(PORT);
+            if !ok && attempt == 3 {
+                eprintln!("[desktop] port {} still in use after 3 attempts; aborting", PORT);
+                return;
+            }
+        }
+    }
+
     match hidden_command(&venv_python)
         .current_dir(&backend_dir)
         .args(["-m", "papermate.api"])
