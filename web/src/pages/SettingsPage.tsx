@@ -202,6 +202,9 @@ export function SettingsPage() {
   const [figInstall, setFigInstall] = useState<FigureInstallStatus | null>(null);
   /** ★ 重新检测的进行态（2026-10-10）：原先点了毫无可见反馈，被用户当成"没用" */
   const [depsChecking, setDepsChecking] = useState(false);
+  // ★ 2026-10-23：检测完成后给个**明确反馈**。此前只 setDepsChecking(true/false)，
+  //   而探测是本地 import（<100ms）⇒「检测中…」一闪而过；结果又和原来一样 ⇒ 用户以为没反应 ✗
+  const [depsCheckedAt, setDepsCheckedAt] = useState<number | null>(null);
 
   /** 实时重探测三能力（不做缓存；装完后调用即可拿到真值，无需重启 App）。 */
   const refreshEnrichDeps = async () => {
@@ -216,10 +219,16 @@ export function SettingsPage() {
    *  反馈 = ①按钮自身变「检测中…」禁用 ②状态行尾追加「检测中…」③完成后状态行刷新为真值。 */
   const recheckDeps = async () => {
     setDepsChecking(true);
+    setDepsCheckedAt(null);
     try {
-      await refreshEnrichDeps();
+      // ★ 与"最短 400ms"并行：否则本地 import 太快，「检测中…」用户根本看不到
+      await Promise.all([
+        refreshEnrichDeps(),
+        new Promise((r) => window.setTimeout(r, 400)),
+      ]);
     } finally {
       setDepsChecking(false);
+      setDepsCheckedAt(Date.now());
     }
   };
 
@@ -1452,6 +1461,12 @@ export function SettingsPage() {
                     <button type="button" className="settings-btn-ghost" disabled={depsChecking} onClick={() => void recheckDeps()}>
                       {depsChecking ? "检测中…" : "重新检测"}
                     </button>
+                    {depsCheckedAt && !depsChecking && (
+                      <span className="settings-hint" role="status">
+                        ✓ 检测完成（{new Date(depsCheckedAt).toLocaleTimeString()}）
+                        {enrichDeps && enrichDeps.ocr && enrichDeps.table ? " · 全部就绪" : " · 仍有缺失"}
+                      </span>
+                    )}
                   </>
                 )}
               </div>
