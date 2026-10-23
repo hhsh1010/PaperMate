@@ -1602,21 +1602,13 @@ async def stream_message(session_id: int, body: ChatRequest, request: Request) -
             #      所以这里的数值天然**小于**普通问答轮 —— 这是**真实值**，不要折算、也不要跨轮比较。
             #   ⚠️ 只有 `peak > 0` 才注入：若写成 `peak_prompt_tokens: 0`，前端 `??` 会短路
             #      掉历史回填（`ctx.peak`），把"无数据"显示成 0%。
+            # ★★ 2026-10-23：技能路径**不再上报** `ctx`。
+            #   原因：`recorder.peak_prompt_tokens` 记的是**技能自己内部那次 LLM 调用**的 prompt
+            #   （实测 456 tokens —— 技能只把少量参数喂给模型），**不是会话上下文** ✗
+            #   之前把它当"上下文占用"发出去 ⇒ 面板显示 `456 / 100K = 0.0%`，
+            #   用户以为"上下文归零了"（真实占用在别的轮次里是 12.7K）。
+            #   ⇒ 技能轮不提供该字段，前端自然回落到上一轮的 `ctx`/`done`，口径一致。
             _ctx_payload: dict = {}
-            if recorder is not None and recorder.peak_prompt_tokens > 0:
-                _ctx_payload = {
-                    "peak_prompt_tokens": recorder.peak_prompt_tokens,
-                    # ★★ 2026-10-23：这里原来直接取 `get_state()["max_tokens_budget"]`（原始 30000），
-                    #   而普通路径的 AgentLoop 用的是**解析后**的预算（`resolve_budget_for(model)`，
-                    #   按模型窗口 auto 推算，deepseek 1M ⇒ 100000）。
-                    #   ⇒ 同一份"预算"在两条路径上取值不同 = **第三把尺子** ✗
-                    #   表现：技能轮里面板显示 `2.7K / 30K = 9.0%`，而真实是 `2.7K / 100K = 2.7%`
-                    #   （用户会误以为上下文快满了）。
-                    #   现在统一走 resolve_budget_for，未登记模型时它自己回落原始值，口径一致。
-                    "max_tokens_budget": runtime_settings.resolve_budget_for(
-                        runtime_settings.get_state().get("default_model")
-                    ),
-                }
             # 2026-09-07 修复：持久化用 user_content（含多模态图片块）而非 body.content 纯文本，
             # 否则走技能路径（/总结 /对比 等）时用户随消息发送的图片不会写入历史，
             # 刷新后图片上下文丢失（与"多模态历史不丢失"目标矛盾，Agent/直答路径均用 user_content）。

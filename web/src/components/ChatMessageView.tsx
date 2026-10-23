@@ -113,7 +113,9 @@ export const ChatMessageView = memo(function ChatMessageView({
   const m = item as AssistantMessage;
   // 推理过程默认**展开**（2026-09-28 用户要求）：此前折叠着，必须点开才看得见，
   // 等于"有展示但看不见"。用受控 `open`：用户手动收起后不会被下次渲染强行展开。
-  const [thinkOpen, setThinkOpen] = useState(true);
+  // ★ 2026-10-23：默认**折叠**。展开时是一长串「步骤 N」+ 工具卡片，非常吵；
+  //   需要排查时用户点开即可（内容不删，只收起）。
+  const [thinkOpen, setThinkOpen] = useState(false);
   const hasThinking = m.thinking.length > 0;
   const hasReasoning = !!m.reasoning;
   // `retrieve` 是**内部检索手段**，不作为"工具"展示（2026-09-28 用户要求）：
