@@ -3963,7 +3963,10 @@ input, select, textarea { font-family: inherit; }
 .balance-num { font-size: 16px; font-weight: 700; color: var(--text-strong); }
 .balance-reason { font-size: 12px; color: var(--muted); line-height: 1.5; }
 .settings-checkbox { width: 18px; height: 18px; }
-.settings-actions { display: flex; gap: 10px; }
+/* ★ 2026-10-23：必须 align-items: flex-start。
+   默认是 stretch —— 同一行里若有长文本（`settings-hint`），按钮会被**撑到文本高度**，
+   按钮文字被迫折成两行（实测：「已全部就绪」变成 2 行的超大按钮，与下方同类按钮不一致）。 */
+.settings-actions { display: flex; gap: 10px; align-items: flex-start; }
 
 /* ---- 重建索引过程可视化（RAG 底座检索增强）---- */
 .reindex-btn-inner { display: inline-flex; align-items: center; gap: 8px; }
