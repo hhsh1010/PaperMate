@@ -493,6 +493,10 @@ class ChatService:
 
         registry = ToolRegistry()
         register_builtin_tools(registry, rag_pipeline=rag, doc_labels=doc_labels)
+        # ★ 2026-10-23：retrieve 被压缩后（每段 ≤200 字）模型可按 id 取全文
+        from .doc_tools import register_doc_tools
+
+        register_doc_tools(registry, self._Session)
         # 注：原生联网能力当前仅 Qwen（DashScope）已验证可用，受会话『联网』开关与系统提示词门控，
         # 不再注册独立的网络工具（arxiv_search/web_search/fetch_url）。DeepSeek 等厂商 chat/completions
         # 不支持 web_search 工具，故不注入。
