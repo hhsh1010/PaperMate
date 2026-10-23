@@ -12,6 +12,7 @@ import { Icons } from "../lib/icons";
  */
 export const MessageList = memo(function MessageList({
   items,
+  currentBudget,
   onBottomRef,
   onOpenCitation,
   activeDocIds,
@@ -31,6 +32,8 @@ export const MessageList = memo(function MessageList({
   onRate?: (messageId: number, rating: 1 | -1) => void;
   /** E1：messageId → 当前评分（刷新后回填高亮用） */
   ratedMap?: Record<number, number>;
+  /** ★ 当前解析后的上下文预算（优先于历史消息里存的旧值，保证同一对话分母一致）。 */
+  currentBudget?: number;
 }) {
   return (
     <div className="message-list">

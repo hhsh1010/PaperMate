@@ -967,6 +967,10 @@ export function ChatPage({
             lastAssistantId={lastAssistantId}
             onRate={rateMessage}
             ratedMap={ratedMap}
+            /* ★ 2026-10-23：把**当前**解析后的预算传下去。
+               历史消息里存的 `ctx.budget` 是"写入时"的值（修复前是 30000），
+               直接用它会让同一个对话里的百分比忽高忽低（用户报的"容量变化"）。 */
+            currentBudget={lastCtxUsage?.budget}
           />
         )}
         <ChatInput
