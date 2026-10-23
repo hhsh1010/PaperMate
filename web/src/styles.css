@@ -3967,6 +3967,10 @@ input, select, textarea { font-family: inherit; }
    默认是 stretch —— 同一行里若有长文本（`settings-hint`），按钮会被**撑到文本高度**，
    按钮文字被迫折成两行（实测：「已全部就绪」变成 2 行的超大按钮，与下方同类按钮不一致）。 */
 .settings-actions { display: flex; gap: 10px; align-items: flex-start; }
+/* ★ 2026-10-23（第二轮）：align-items 只解决"拉伸"，没解决"挤压" ✗
+   flex 子项默认 `flex-shrink: 1` ⇒ 同一行里的长说明文字会把按钮**挤窄** ⇒ 按钮文字折成两行。
+   ⇒ 按钮不许收缩 + 文字不许折行；空间不够时让文字那段（可换行）去承担。 */
+.settings-actions > button { flex-shrink: 0; white-space: nowrap; }
 
 /* ---- 重建索引过程可视化（RAG 底座检索增强）---- */
 .reindex-btn-inner { display: inline-flex; align-items: center; gap: 8px; }
