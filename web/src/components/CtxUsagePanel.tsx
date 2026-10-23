@@ -187,33 +187,33 @@ export function CtxUsageBar({
             </button>
           </div>
 
-          {/* 顶部：百分比 + 已用量（与参考图一致：数值在上，条在下） */}
+          {/* ★ 2026-10-23（用户："上下文容量应该固定展示为整个对话内所使用的上下文用量，
+              随对话次数与输入输出增加而增加"）：
+              ⇒ **主数字换成「整个对话累计」**（单调递增，符合直觉）；
+                「本轮」降为次要信息（它表示"当前这条请求占了窗口多少"，会随问题长短浮动）。
+              ⚠️ 两者含义不同、不能相加：
+                · 累计 = 所有轮次 prompt+completion 之和（只增不减，成本口径）；
+                · 本轮 = 历史+本轮工具结果（受窗口约束，忽高忽低是正常的）。 */}
           <div className="ctx-panel-summary">
-            <span className={`ctx-panel-pct ${data.warn ? "warn" : ""}`}>
-              {data.pct.toFixed(1)}%
+            <span className="ctx-panel-pct">
+              {sessionUsage
+                ? fmtTokens(sessionUsage.prompt_tokens + sessionUsage.completion_tokens)
+                : `${data.pct.toFixed(1)}%`}
             </span>
             <span className="ctx-panel-used">
-              已使用 {fmtTokens(data.used)}/ {fmtTokens(data.total)}
+              {sessionUsage
+                ? `整个对话累计 · ${sessionUsage.num_messages} 条消息 · ¥${sessionUsage.cost.toFixed(2)}`
+                : `已使用 ${fmtTokens(data.used)}/ ${fmtTokens(data.total)}`}
             </span>
           </div>
 
-          {/* ★ 2026-10-23（用户："上下文用量要求显示整个对话的用量"）：
-              上面的「已使用」是**本轮峰值**（当前上下文有多满），这里才是**整个对话累计**。
-              ⚠️ 两者含义完全不同 —— 不能相加、不能互换：
-                · 本轮峰值 ≈ 历史 + 本轮工具结果（受上下文窗口约束，会随历史变长而变大）；
-                · 累计 = 所有轮次 prompt+completion 之和（成本口径，只增不减）。 */}
-          {sessionUsage && (
-            <div
-              className="ctx-panel-total"
-              title="整个对话的累计消耗（成本口径，只增不减）；与上面的「已使用」不是同一个概念"
-            >
-              会话累计{" "}
-              <b>{fmtTokens(sessionUsage.prompt_tokens + sessionUsage.completion_tokens)}</b> tokens
-              <span className="ctx-panel-total-sep">·</span>
-              {sessionUsage.num_messages} 条消息
-              <span className="ctx-panel-total-sep">·</span>¥{sessionUsage.cost.toFixed(2)}
-            </div>
-          )}
+          <div className="ctx-panel-total" title="本轮这一条请求占用的上下文（会随问题长短浮动，属正常）">
+            本轮{" "}
+            <b>{fmtTokens(data.used)}</b> / {fmtTokens(data.total)}
+            <span className="ctx-panel-total-sep">·</span>
+            {data.pct.toFixed(1)}%
+            {data.warn && <span className="ctx-panel-total-sep">· 接近上限</span>}
+          </div>
 
           {/* ★ 2026-10-03（用户："面板换成横条统计"）：**底槽 + 多色分段**。
               底槽 = 100%（总容量），分段宽度 = 分项占比 × 占用率（`barSegments` 已算好，
